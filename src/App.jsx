@@ -1,9 +1,12 @@
-export default App;
+import React, { useState } from "react"; // <--- THIS LINE IS CRITICAL
+import Header from "./components/Header";
+import Hero from "./components/Hero";
+import LoadingScreen from "./components/LoadingScreen";
+import Dashboard from "./components/Dashboard";
 
 function App() {
   const [status, setStatus] = useState("idle");
   const [progressStep, setProgressStep] = useState(0);
-
   const [repoName, setRepoName] = useState("");
   const [fullUrl, setFullUrl] = useState("");
 
@@ -37,8 +40,6 @@ function App() {
         {status === "analyzing" && (
           <LoadingScreen onComplete={handleAnalysisComplete} />
         )}
-
-        {}
         {status === "complete" && (
           <Dashboard repoName={repoName} fullUrl={fullUrl} />
         )}
@@ -46,3 +47,5 @@ function App() {
     </div>
   );
 }
+
+export default App;

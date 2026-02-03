@@ -99,7 +99,9 @@ const Dashboard = ({ repoName, fullUrl }) => {
 
         {activeTab === "docs" && <DocGenerator repoUrl={fullUrl} />}
 
-        {activeTab === "chat" && <ChatInterface repoName={repoName} />}
+        {activeTab === "chat" && (
+          <ChatInterface repoName={repoName} fullUrl={fullUrl} />
+        )}
       </motion.div>
     </div>
   );
