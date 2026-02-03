@@ -14,7 +14,7 @@ import DocGenerator from "./DocGenerator";
 import ChatInterface from "./ChatInterface";
 import { motion } from "framer-motion";
 
-const Dashboard = ({ repoName }) => {
+const Dashboard = ({ repoName, fullUrl }) => {
   const [activeTab, setActiveTab] = useState("overview");
 
   const tabs = [
@@ -94,12 +94,11 @@ const Dashboard = ({ repoName }) => {
         )}
 
         {activeTab === "structure" && <ProjectStructure />}
+
         {activeTab === "security" && <SecurityAnalysis />}
-        {activeTab === "docs" && (
-          <DocGenerator
-            repoUrl={"https://github.com/chamoli-rudraksh/DevMind-AI"}
-          />
-        )}
+
+        {activeTab === "docs" && <DocGenerator repoUrl={fullUrl} />}
+
         {activeTab === "chat" && <ChatInterface repoName={repoName} />}
       </motion.div>
     </div>
