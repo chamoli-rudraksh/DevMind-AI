@@ -1,14 +1,14 @@
+export default App;
+
 function App() {
   const [status, setStatus] = useState("idle");
   const [progressStep, setProgressStep] = useState(0);
 
-  const [repoName, setRepoName] = useState(""); // For display (e.g. "user/repo")
-  const [fullUrl, setFullUrl] = useState(""); // For backend (e.g. "https://github.com/...")
+  const [repoName, setRepoName] = useState("");
+  const [fullUrl, setFullUrl] = useState("");
 
   const handleAnalyze = (url) => {
-    setFullUrl(url); // <--- SAVE THE FULL URL
-
-    // Extract simple name for display
+    setFullUrl(url);
     const extractedName = url.includes("github.com")
       ? url.split("github.com/")[1] || url
       : url;
@@ -38,7 +38,7 @@ function App() {
           <LoadingScreen onComplete={handleAnalysisComplete} />
         )}
 
-        {/* PASS FULL URL TO DASHBOARD */}
+        {}
         {status === "complete" && (
           <Dashboard repoName={repoName} fullUrl={fullUrl} />
         )}
