@@ -1,28 +1,28 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from "react";
 import {
   LayoutDashboard,
   FileCode,
   Shield,
   FileText,
   MessageSquare,
-} from 'lucide-react';
-import { clsx } from 'clsx';
-import CodebaseOverview from './CodebaseOverview';
-import ProjectStructure from './ProjectStructure';
-import SecurityAnalysis from './SecurityAnalysis';
-import DocGenerator from './DocGenerator';
-import ChatInterface from './ChatInterface';
-import { motion } from 'framer-motion';
+} from "lucide-react";
+import { clsx } from "clsx";
+import CodebaseOverview from "./CodebaseOverview";
+import ProjectStructure from "./ProjectStructure";
+import SecurityAnalysis from "./SecurityAnalysis";
+import DocGenerator from "./DocGenerator";
+import ChatInterface from "./ChatInterface";
+import { motion } from "framer-motion";
 
 const Dashboard = ({ repoName }) => {
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState("overview");
 
   const tabs = [
-    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-    { id: 'structure', label: 'Structure', icon: FileCode },
-    { id: 'security', label: 'Security', icon: Shield },
-    { id: 'docs', label: 'Docs', icon: FileText },
-    { id: 'chat', label: 'Chat', icon: MessageSquare },
+    { id: "overview", label: "Overview", icon: LayoutDashboard },
+    { id: "structure", label: "Structure", icon: FileCode },
+    { id: "security", label: "Security", icon: Shield },
+    { id: "docs", label: "Docs", icon: FileText },
+    { id: "chat", label: "Chat", icon: MessageSquare },
   ];
 
   // Auto scroll to top on mount
@@ -40,17 +40,15 @@ const Dashboard = ({ repoName }) => {
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={clsx(
-                'w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-sm font-medium',
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-sm font-medium",
                 activeTab === tab.id
-                  ? 'bg-[#2A3254] text-white border-l-4 border-[#3B82F6] shadow-lg'
-                  : 'text-[#94A3B8] hover:bg-[#1A1F3A] hover:text-white'
+                  ? "bg-[#2A3254] text-white border-l-4 border-[#3B82F6] shadow-lg"
+                  : "text-[#94A3B8] hover:bg-[#1A1F3A] hover:text-white",
               )}
             >
               <tab.icon
                 size={18}
-                className={
-                  activeTab === tab.id ? 'text-[#3B82F6]' : ''
-                }
+                className={activeTab === tab.id ? "text-[#3B82F6]" : ""}
               />
               {tab.label}
             </button>
@@ -65,10 +63,10 @@ const Dashboard = ({ repoName }) => {
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={clsx(
-              'flex items-center gap-2 px-4 py-2 rounded-full whitespace-nowrap text-sm border transition-all',
+              "flex items-center gap-2 px-4 py-2 rounded-full whitespace-nowrap text-sm border transition-all",
               activeTab === tab.id
-                ? 'bg-[#3B82F6]/10 border-[#3B82F6] text-[#3B82F6]'
-                : 'bg-[#1A1F3A] border-[#2A3254] text-[#94A3B8]'
+                ? "bg-[#3B82F6]/10 border-[#3B82F6] text-[#3B82F6]"
+                : "bg-[#1A1F3A] border-[#2A3254] text-[#94A3B8]",
             )}
           >
             <tab.icon size={16} />
@@ -85,7 +83,7 @@ const Dashboard = ({ repoName }) => {
         transition={{ duration: 0.3 }}
         className="flex-1 space-y-8"
       >
-        {activeTab === 'overview' && (
+        {activeTab === "overview" && (
           <>
             <CodebaseOverview repoName={repoName} />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -95,14 +93,14 @@ const Dashboard = ({ repoName }) => {
           </>
         )}
 
-        {activeTab === 'structure' && <ProjectStructure />}
-        {activeTab === 'security' && <SecurityAnalysis />}
-        {activeTab === 'docs' && (
-          <DocGenerator repoName={repoName} />
+        {activeTab === "structure" && <ProjectStructure />}
+        {activeTab === "security" && <SecurityAnalysis />}
+        {activeTab === "docs" && (
+          <DocGenerator
+            repoUrl={"https://github.com/chamoli-rudraksh/DevMind-AI"}
+          />
         )}
-        {activeTab === 'chat' && (
-          <ChatInterface repoName={repoName} />
-        )}
+        {activeTab === "chat" && <ChatInterface repoName={repoName} />}
       </motion.div>
     </div>
   );
