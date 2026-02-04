@@ -1,72 +1,98 @@
-import React from 'react';
-import { ShieldAlert, AlertTriangle, ExternalLink } from 'lucide-react';
-import { clsx } from 'clsx';
+import React, { useState, useEffect } from "react";
+import {
+  ShieldAlert,
+  AlertTriangle,
+  ExternalLink,
+  Loader2,
+} from "lucide-react";
+import { clsx } from "clsx";
 
-const mockIssues = [
-  {
-    id: '1',
-    severity: 'CRITICAL',
-    title: 'SQL Injection Vulnerability',
-    location: 'routes/auth.js:47',
-    description:
-      'User input is directly concatenated into the SQL query string without sanitization.',
-  },
-  {
-    id: '2',
-    severity: 'HIGH',
-    title: 'Hardcoded API Key',
-    location: 'config/default.json:12',
-    description: 'AWS Secret Key detected in plain text source code.',
-  },
-  {
-    id: '3',
-    severity: 'MEDIUM',
-    title: 'Weak Hashing Algorithm',
-    location: 'utils/crypto.js:22',
-    description:
-      'MD5 is used for password hashing. Recommend upgrading to Argon2 or bcrypt.',
-  },
-];
+const SecurityAnalysis = ({ fullUrl }) => {
+  const [issues, setIssues] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-const SecurityAnalysis = () => {
+  useEffect(() => {
+    if (!fullUrl) return;
+
+    const fetchSecurity = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch("http://127.0.0.1:8000/api/analyze-security", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo_url: fullUrl }),
+        });
+        const data = await res.json();
+        setIssues(data.issues || []);
+      } catch (e) {
+        console.error("Security scan failed", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSecurity();
+  }, [fullUrl]);
+
   return (
-    <div className="bg-[#2A3254] rounded-2xl border border-[#4A5578]/50 p-8 hover:border-[#3B82F6]/50 transition-colors shadow-lg">
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-[#4A5578]/30">
+    <div className="bg-[#2A3254] rounded-2xl border border-[#4A5578]/50 p-8 hover:border-[#3B82F6]/50 transition-colors shadow-lg h-full overflow-hidden flex flex-col">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-[#4A5578]/30 shrink-0">
         <div className="flex items-center gap-3">
           <ShieldAlert className="text-[#F43F5E]" size={24} />
           <h2 className="text-xl font-semibold text-white">
             Security Analysis
           </h2>
         </div>
-        <span className="text-[#94A3B8] text-sm">Last scan: 2m ago</span>
+        {loading ? (
+          <span className="text-[#3B82F6] text-sm animate-pulse">
+            Scanning...
+          </span>
+        ) : (
+          <span className="text-[#94A3B8] text-sm">
+            Issues: {issues.length}
+          </span>
+        )}
       </div>
 
-      <div className="space-y-4">
-        {mockIssues.map((issue) => (
+      <div className="space-y-4 overflow-y-auto pr-2 custom-scrollbar flex-1 min-h-[300px]">
+        {loading && (
+          <div className="flex flex-col items-center justify-center h-40 text-[#94A3B8] gap-3">
+            <Loader2 className="animate-spin text-[#3B82F6]" size={32} />
+            <p>Analyzing codebase for vulnerabilities...</p>
+          </div>
+        )}
+
+        {!loading && issues.length === 0 && (
+          <div className="text-center text-[#94A3B8] py-10">
+            No security issues found. Great job!
+          </div>
+        )}
+
+        {issues.map((issue, idx) => (
           <div
-            key={issue.id}
+            key={idx}
             className={clsx(
-              'bg-[#1A1F3A] rounded-lg p-5 border-l-4 transition-transform hover:-translate-x-1',
-              issue.severity === 'CRITICAL'
-                ? 'border-l-[#F43F5E]'
-                : issue.severity === 'HIGH'
-                ? 'border-l-[#F59E0B]'
-                : issue.severity === 'MEDIUM'
-                ? 'border-l-[#06B6D4]'
-                : 'border-l-[#10B981]'
+              "bg-[#1A1F3A] rounded-lg p-5 border-l-4 transition-transform hover:-translate-x-1",
+              issue.severity === "CRITICAL"
+                ? "border-l-[#F43F5E]"
+                : issue.severity === "HIGH"
+                  ? "border-l-[#F59E0B]"
+                  : issue.severity === "MEDIUM"
+                    ? "border-l-[#06B6D4]"
+                    : "border-l-[#10B981]",
             )}
           >
             <div className="flex justify-between items-start mb-2">
               <span
                 className={clsx(
-                  'text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider',
-                  issue.severity === 'CRITICAL'
-                    ? 'bg-[#F43F5E]/20 text-[#F43F5E]'
-                    : issue.severity === 'HIGH'
-                    ? 'bg-[#F59E0B]/20 text-[#F59E0B]'
-                    : issue.severity === 'MEDIUM'
-                    ? 'bg-[#06B6D4]/20 text-[#06B6D4]'
-                    : 'bg-[#10B981]/20 text-[#10B981]'
+                  "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider",
+                  issue.severity === "CRITICAL"
+                    ? "bg-[#F43F5E]/20 text-[#F43F5E]"
+                    : issue.severity === "HIGH"
+                      ? "bg-[#F59E0B]/20 text-[#F59E0B]"
+                      : issue.severity === "MEDIUM"
+                        ? "bg-[#06B6D4]/20 text-[#06B6D4]"
+                        : "bg-[#10B981]/20 text-[#10B981]",
                 )}
               >
                 {issue.severity}
@@ -85,15 +111,6 @@ const SecurityAnalysis = () => {
             <p className="text-[#94A3B8] text-sm mb-4 leading-relaxed">
               {issue.description}
             </p>
-
-            <div className="flex gap-3">
-              <button className="text-xs px-3 py-1.5 border border-[#4A5578] rounded hover:bg-[#4A5578]/20 text-[#E2E8F0] transition-colors">
-                View Code
-              </button>
-              <button className="flex items-center gap-1 text-xs px-3 py-1.5 bg-gradient-to-r from-[#3B82F6] to-[#06B6D4] rounded text-white font-medium hover:opacity-90 transition-opacity">
-                See Fix <ExternalLink size={10} />
-              </button>
-            </div>
           </div>
         ))}
       </div>

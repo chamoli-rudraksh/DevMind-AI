@@ -85,10 +85,13 @@ const Dashboard = ({ repoName, fullUrl }) => {
       >
         {activeTab === "overview" && (
           <>
-            <CodebaseOverview repoName={repoName} />
+            {}
+            <CodebaseOverview repoName={repoName} fullUrl={fullUrl} />
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <ProjectStructure />
-              <SecurityAnalysis />
+              {}
+              <ProjectStructure fullUrl={fullUrl} />
+              <SecurityAnalysis fullUrl={fullUrl} />
             </div>
           </>
         )}
