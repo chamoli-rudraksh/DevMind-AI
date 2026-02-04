@@ -5,6 +5,7 @@ import google.generativeai as genai
 from ingest import clone_and_scan
 import os
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
@@ -92,6 +93,50 @@ async def chat_with_repo(request: ChatRequest):
         print("Tip: Check your API_KEY in backend/.env")
         print("\n\n")
         raise HTTPException(status_code=500, detail=str(e))
+
+class OverviewRequest(BaseModel):
+    url: str
+
+@app.post("/overview")
+async def get_repo_overview(request: OverviewRequest):
+    global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL
+    
+    # Scan if needed
+    if request.url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
+        print(f"Scanning repo for overview: {request.url}")
+        CURRENT_CODE_CONTEXT = clone_and_scan(request.url)
+        CURRENT_REPO_URL = request.url
+
+    prompt = f"""
+    You are a Senior Tech Lead. Analyze the codebase below and return a Strict JSON summary.
+    
+    Required JSON Structure:
+    {{
+        "description": "A 2-sentence summary of what this project does.",
+        "tech_stack": ["List", "of", "languages/frameworks"],
+        "key_features": ["Feature 1", "Feature 2", "Feature 3"],
+        "stats": {{
+            "files": "Estimated count",
+            "complexity": "Low/Medium/High"
+        }}
+    }}
+    
+    CODEBASE CONTEXT:
+    {CURRENT_CODE_CONTEXT[:100000]}
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        clean_text = response.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(clean_text)
+    except Exception as e:
+        print(f"Overview Error: {e}")
+        return {
+            "description": "Could not analyze overview.", 
+            "tech_stack": ["Unknown"], 
+            "key_features": [],
+            "stats": {"files": "?", "complexity": "?"}
+        }
 
 if __name__ == "__main__":
     import uvicorn
