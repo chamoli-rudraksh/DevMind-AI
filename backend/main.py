@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import json
 import sqlite3
 import time
+import subprocess
 
 load_dotenv()
 
@@ -20,32 +21,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 1. CONFIGURATION & DEBUGGING ---
+# --- 1. CONFIGURATION ---
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     print("WARNING: GEMINI_API_KEY not found. Check your .env file!")
 
 genai.configure(api_key=api_key)
 
-# 🔍 DEBUG: PRINT ALL AVAILABLE MODELS ON STARTUP
-print("\n---------------------------------------------------------")
-print("🔍 CHECKING AVAILABLE MODELS FOR YOUR KEY:")
+# Startup Check
+print("\n🔍 CHECKING AVAILABLE MODELS...")
 try:
-    available_models = []
     for m in genai.list_models():
         if 'generateContent' in m.supported_generation_methods:
             print(f"   ✅ {m.name}")
-            available_models.append(m.name)
-    print("---------------------------------------------------------\n")
-except Exception as e:
-    print(f"   ❌ Error listing models: {e}\n")
+except:
+    pass
 
-# Use a standard model. If the list above shows something else, change this string!
-# Common options: 'gemini-1.5-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-pro'
-model = genai.GenerativeModel('gemini-flash-latest')
+# Use the standard free model
+model = genai.GenerativeModel('gemini-flash-lite-latest')
 
-
-# --- 2. PERSISTENT CACHE ---
+# --- 2. SMART PERSISTENT CACHE ---
 DB_FILE = "api_cache.db"
 
 def init_db():
@@ -58,12 +53,35 @@ def init_db():
             )
         """)
 
+def get_latest_commit_hash(repo_url):
+    """
+    Pings the remote git server to get the latest Commit Hash.
+    This allows us to invalidate the cache if the repo has changed.
+    """
+    try:
+        # git ls-remote returns the hash of the HEAD commit without downloading
+        result = subprocess.check_output(
+            ["git", "ls-remote", repo_url, "HEAD"], 
+            stderr=subprocess.STDOUT,
+            timeout=5
+        ).decode().split()[0]
+        return result
+    except Exception as e:
+        print(f"⚠️ Could not get git hash (Offline?): {e}")
+        return "latest" # Fallback if offline
+
+def get_smart_cache_key(prefix, repo_url):
+    """Generates a key that changes automatically when the repo updates."""
+    commit_hash = get_latest_commit_hash(repo_url)
+    return f"{prefix}_{repo_url}_{commit_hash}"
+
 def get_cached_response(key: str):
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.execute("SELECT data FROM responses WHERE cache_key = ?", (key,))
             row = cursor.fetchone()
             if row:
+                print(f"⚡ Smart Cache Hit: {key}")
                 return json.loads(row[0])
     except Exception:
         pass
@@ -140,7 +158,9 @@ async def get_project_structure(request: OverviewRequest):
 
 @app.post("/api/analyze-security")
 async def analyze_security(request: SecurityRequest):
-    cache_key = f"security_{request.repo_url}"
+    # SMART CACHE: Uses Commit Hash
+    cache_key = get_smart_cache_key("security", request.repo_url)
+    
     cached = get_cached_response(cache_key)
     if cached: return cached
 
@@ -171,7 +191,9 @@ async def analyze_security(request: SecurityRequest):
 
 @app.post("/overview")
 async def get_repo_overview(request: OverviewRequest):
-    cache_key = f"overview_{request.url}"
+    # SMART CACHE: Uses Commit Hash
+    cache_key = get_smart_cache_key("overview", request.url)
+    
     cached = get_cached_response(cache_key)
     if cached: return cached
 
@@ -197,8 +219,8 @@ async def get_repo_overview(request: OverviewRequest):
         return data
     except Exception:
         return {
-            "description": "AI Service Busy. Please try again in 1 minute.",
-            "tech_stack": ["Analysis Pending..."],
+            "description": "Analysis Failed (Busy). Try again.",
+            "tech_stack": [],
             "key_features": [],
             "stats": {"files": "?", "complexity": "?"}
         }
@@ -211,7 +233,7 @@ async def chat_with_repo(request: ChatRequest):
         response = model.generate_content(prompt)
         return {"response": response.text}
     except Exception:
-        return {"response": "I'm a bit overwhelmed right now (Rate Limit). Please ask again in 30 seconds."}
+        return {"response": "System Overload (Rate Limit). Please wait 30s."}
 
 @app.post("/generate")
 async def generate_docs(request: RepoRequest):
@@ -221,7 +243,7 @@ async def generate_docs(request: RepoRequest):
         response = model.generate_content(prompt)
         return {"markdown": response.text}
     except Exception as e:
-        return {"markdown": f"Error generating docs: {str(e)}"}
+        return {"markdown": f"Error: {str(e)}"}
 
 if __name__ == "__main__":
     import uvicorn
