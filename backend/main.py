@@ -39,7 +39,6 @@ class ChatRequest(BaseModel):
 async def generate_docs(request: RepoRequest):
     global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL
     
-    # Only re-scan if it's a new repo
     if request.url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
         print(f"Scanning new repo: {request.url}")
         CURRENT_CODE_CONTEXT = clone_and_scan(request.url)
