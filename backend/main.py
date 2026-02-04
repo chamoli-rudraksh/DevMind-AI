@@ -2,11 +2,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted
 from ingest import clone_and_scan
 import os
 from dotenv import load_dotenv
 import json
+import sqlite3
+import time
 
 load_dotenv()
 
@@ -19,22 +20,86 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 1. CONFIGURATION ---
+# --- 1. CONFIGURATION & DEBUGGING ---
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     print("WARNING: GEMINI_API_KEY not found. Check your .env file!")
 
 genai.configure(api_key=api_key)
 
-# ✅ FIX: Use the specific stable model for 2026
-# 'gemini-flash-latest' can be unstable. 'gemini-2.5-flash' is the standard.
+# 🔍 DEBUG: PRINT ALL AVAILABLE MODELS ON STARTUP
+print("\n---------------------------------------------------------")
+print("🔍 CHECKING AVAILABLE MODELS FOR YOUR KEY:")
+try:
+    available_models = []
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            print(f"   ✅ {m.name}")
+            available_models.append(m.name)
+    print("---------------------------------------------------------\n")
+except Exception as e:
+    print(f"   ❌ Error listing models: {e}\n")
+
+# Use a standard model. If the list above shows something else, change this string!
+# Common options: 'gemini-1.5-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-pro'
 model = genai.GenerativeModel('gemini-flash-latest')
 
-# Global State
+
+# --- 2. PERSISTENT CACHE ---
+DB_FILE = "api_cache.db"
+
+def init_db():
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS responses (
+                cache_key TEXT PRIMARY KEY,
+                data TEXT,
+                timestamp REAL
+            )
+        """)
+
+def get_cached_response(key: str):
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.execute("SELECT data FROM responses WHERE cache_key = ?", (key,))
+            row = cursor.fetchone()
+            if row:
+                return json.loads(row[0])
+    except Exception:
+        pass
+    return None
+
+def save_to_cache(key: str, data: dict):
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO responses (cache_key, data, timestamp) VALUES (?, ?, ?)",
+                (key, json.dumps(data), time.time())
+            )
+    except Exception:
+        pass
+
+init_db()
+
+# --- Helper State ---
 CURRENT_CODE_CONTEXT = ""
 CURRENT_REPO_URL = ""
 
+def ensure_context(url):
+    global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL
+    if url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
+        print(f"📂 Cloning: {url}")
+        CURRENT_CODE_CONTEXT = clone_and_scan(url)
+        CURRENT_REPO_URL = url
+    return CURRENT_CODE_CONTEXT
+
 # --- Request Models ---
+class OverviewRequest(BaseModel):
+    url: str
+
+class SecurityRequest(BaseModel):
+    repo_url: str
+
 class RepoRequest(BaseModel):
     url: str
     doc_type: str = "README.md"
@@ -43,147 +108,120 @@ class ChatRequest(BaseModel):
     message: str
     repo_url: str
 
-class OverviewRequest(BaseModel):
-    url: str
+# --- ROUTES ---
 
-class SecurityRequest(BaseModel):
-    repo_url: str
-    repo_name: str = ""
-
-# --- Routes ---
-
-@app.post("/generate")
-async def generate_docs(request: RepoRequest):
-    global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL
+@app.post("/structure")
+async def get_project_structure(request: OverviewRequest):
+    """Returns the file tree (Local only, no AI)."""
+    ensure_context(request.url)
     
-    if request.url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
-        print(f"Scanning new repo: {request.url}")
-        CURRENT_CODE_CONTEXT = clone_and_scan(request.url)
-        CURRENT_REPO_URL = request.url
+    ignore_dirs = {'.git', 'node_modules', '__pycache__', 'dist', 'build', 'venv', '.idea', '.vscode'}
     
-    if request.doc_type == "CONTRIBUTING.md":
-        focus = "how to contribute, pull request guidelines, and code of conduct"
-    else:
-        focus = "project purpose, installation, usage, and tech stack"
+    def build_tree(path):
+        name = os.path.basename(path)
+        item = {"name": name, "type": "file"}
+        
+        if os.path.isdir(path):
+            item["type"] = "folder"
+            item["children"] = []
+            try:
+                for entry in sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower())):
+                    if entry.name in ignore_dirs: continue
+                    item["children"].append(build_tree(entry.path))
+            except PermissionError: pass
+        return item
 
-    prompt = f"""
-    You are an AI Documentation Engineer. 
-    Analyze the codebase below and generate a professional {request.doc_type}.
-    Focus strictly on: {focus}.
-    
-    CODEBASE CONTEXT:
-    {CURRENT_CODE_CONTEXT[:100000]} 
-    """
-    
-    try:
-        response = model.generate_content(prompt)
-        return {"markdown": response.text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    repo_path = "temp_repo"
+    if not os.path.exists(repo_path):
+        return {"error": "Repo not found"}
+        
+    tree = build_tree(repo_path)
+    return {"structure": tree.get("children", [])}
 
-@app.post("/chat")
-async def chat_with_repo(request: ChatRequest):
-    global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL
+@app.post("/api/analyze-security")
+async def analyze_security(request: SecurityRequest):
+    cache_key = f"security_{request.repo_url}"
+    cached = get_cached_response(cache_key)
+    if cached: return cached
 
-    if request.repo_url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
-        print(f"Scanning repo for chat: {request.repo_url}")
-        CURRENT_CODE_CONTEXT = clone_and_scan(request.repo_url)
-        CURRENT_REPO_URL = request.repo_url
+    context = ensure_context(request.repo_url)
 
     prompt = f"""
-    You are an expert developer assistant. Answer the user's question based strictly on the codebase provided below.
-    
-    USER QUESTION: {request.message}
+    You are a Senior Security Engineer. Analyze the codebase below for security vulnerabilities.
+    Focus on: Hardcoded secrets, SQL injection, XSS, dangerous dependencies.
     
     CODEBASE CONTEXT:
-    {CURRENT_CODE_CONTEXT[:100000]}
-    """
+    {context[:100000]}
     
+    Return ONLY a JSON object with a key "issues" containing a list. 
+    Each item must have: "severity" (CRITICAL, HIGH, MEDIUM, LOW), "title", "location", and "description".
+    Do not use Markdown.
+    """
+
     try:
         response = model.generate_content(prompt)
-        return {"response": response.text}
+        json_str = response.text.replace('```json', '').replace('```', '').strip()
+        data = json.loads(json_str)
+        save_to_cache(cache_key, data)
+        return data
+
     except Exception as e:
-        print(f"Chat Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Security Scan Error: {e}")
+        return {"issues": []}
 
 @app.post("/overview")
 async def get_repo_overview(request: OverviewRequest):
-    global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL
-    
-    if request.url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
-        print(f"Scanning repo for overview: {request.url}")
-        CURRENT_CODE_CONTEXT = clone_and_scan(request.url)
-        CURRENT_REPO_URL = request.url
+    cache_key = f"overview_{request.url}"
+    cached = get_cached_response(cache_key)
+    if cached: return cached
+
+    context = ensure_context(request.url)
 
     prompt = f"""
     You are a Senior Tech Lead. Analyze the codebase below and return a Strict JSON summary.
-    
     Required JSON Structure:
     {{
-        "description": "A 2-sentence summary of what this project does.",
-        "tech_stack": ["List", "of", "languages/frameworks"],
-        "key_features": ["Feature 1", "Feature 2", "Feature 3"],
-        "stats": {{
-            "files": "Estimated count",
-            "complexity": "Low/Medium/High"
-        }}
+        "description": "Summary",
+        "tech_stack": ["List"],
+        "key_features": ["List"],
+        "stats": {{ "files": "count", "complexity": "Low/Medium/High" }}
     }}
-    
-    CODEBASE CONTEXT:
-    {CURRENT_CODE_CONTEXT[:100000]}
+    Context: {context[:100000]}
     """
     
     try:
         response = model.generate_content(prompt)
         clean_text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(clean_text)
-    except Exception as e:
-        print(f"Overview Error: {e}")
+        data = json.loads(clean_text)
+        save_to_cache(cache_key, data)
+        return data
+    except Exception:
         return {
-            "description": "Could not analyze overview.", 
-            "tech_stack": ["Unknown"], 
+            "description": "AI Service Busy. Please try again in 1 minute.",
+            "tech_stack": ["Analysis Pending..."],
             "key_features": [],
             "stats": {"files": "?", "complexity": "?"}
         }
 
-# ✅ MERGED SECURITY ROUTE
-@app.post("/api/analyze-security")
-async def analyze_security(request: SecurityRequest):
-    global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL
-    
-    # 1. Reuse existing scan if available
-    if request.repo_url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
-        print(f"Scanning repo for security: {request.repo_url}")
-        CURRENT_CODE_CONTEXT = clone_and_scan(request.repo_url)
-        CURRENT_REPO_URL = request.repo_url
-
-    # 2. Construct Prompt
-    prompt = f"""
-    You are a Senior Security Engineer. Analyze the codebase below for security vulnerabilities.
-    Focus on: Hardcoded secrets, SQL injection, XSS, dangerous dependencies, and weak cryptography.
-    
-    CODEBASE CONTEXT:
-    {CURRENT_CODE_CONTEXT[:100000]}
-    
-    Return ONLY a JSON object with a key "issues" containing a list. 
-    Each item must have: "severity" (CRITICAL, HIGH, MEDIUM, LOW), "title", "location" (filename:line), and "description".
-    Do not use Markdown formatting. Just raw JSON.
-    """
-
+@app.post("/chat")
+async def chat_with_repo(request: ChatRequest):
+    context = ensure_context(request.repo_url)
+    prompt = f"Answer: {request.message}. Code: {context[:50000]}"
     try:
-        # Using the globally configured 'gemini-2.5-flash' model
         response = model.generate_content(prompt)
-        
-        # Clean up response
-        json_str = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(json_str)
+        return {"response": response.text}
+    except Exception:
+        return {"response": "I'm a bit overwhelmed right now (Rate Limit). Please ask again in 30 seconds."}
 
-    except ResourceExhausted:
-        raise HTTPException(status_code=429, detail="AI Quota Exceeded. Please wait 60 seconds.")
-        
+@app.post("/generate")
+async def generate_docs(request: RepoRequest):
+    context = ensure_context(request.url)
+    prompt = f"Generate {request.doc_type}. Context: {context[:50000]}"
+    try:
+        response = model.generate_content(prompt)
+        return {"markdown": response.text}
     except Exception as e:
-        print(f"Security Scan Error: {e}")
-        return {"issues": []}
+        return {"markdown": f"Error generating docs: {str(e)}"}
 
 if __name__ == "__main__":
     import uvicorn
