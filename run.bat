@@ -1,30 +1,51 @@
 @echo off
-echo 🚀 Starting DevMind-AI Stack...
+setlocal
+cd /d "%~dp0"
 
-:: --- 1. CHECK FOR .ENV ---
-if not exist backend\.env (
-    echo ⚠️  .env file not found in backend!
-    echo 📄 Creating backend\.env for you...
-    echo GEMINI_API_KEY= > backend\.env
-    echo.
-    echo 🛑 ACTION REQUIRED: Please open 'backend\.env' and paste your API Key.
-    echo    Once you have saved the file, run this script again.
+echo [INFO] Starting DevMind-AI Stack...
+
+:: --- 1. CHECK PREREQUISITES ---
+python --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [ERROR] Python is not installed! Install it from python.org.
     pause
-    exit
+    exit /b
 )
 
-:: --- 2. START BACKEND (New Window) ---
-echo 🐍 Launching Backend Server...
-:: We use 'start' to open a new window.
-:: It goes into 'backend', creates venv if needed, installs reqs, and runs uvicorn.
-start "DevMind Backend" cmd /k "cd backend & if not exist venv (python -m venv venv) & .\venv\Scripts\pip install -r requirements.txt & .\venv\Scripts\python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000"
+:: Check for Node.js (Auto-download if missing)
+where npm >nul 2>nul
+if %errorlevel% neq 0 (
+    if not exist "node_bin\npm.cmd" (
+        echo [INFO] Node.js missing. Downloading portable version...
+        if not exist "node_bin" mkdir node_bin
+        powershell -Command "Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.11.0/node-v20.11.0-win-x64.zip' -OutFile 'node.zip'"
+        tar -xf node.zip --strip-components=1 -C node_bin
+        del node.zip
+    )
+    set "PATH=%CD%\node_bin;%PATH%"
+)
 
-:: --- 3. START FRONTEND (Current Window) ---
-echo ⚛️  Launching Frontend...
+:: --- 2. CHECK FOR .ENV ---
+if not exist backend\.env (
+    echo [WARNING] .env file missing in backend.
+    echo GEMINI_API_KEY= > backend\.env
+    echo [ACTION REQUIRED] Open 'backend\.env' and paste your API Key.
+    pause
+    exit /b
+)
+
+:: --- 3. START BACKEND ---
+echo [INFO] Launching Backend Window...
+:: This is the fix: We just launch the file we created in Step 1
+start "DevMind Backend" "backend\run_backend.bat"
+
+:: --- 4. START FRONTEND ---
+echo [INFO] Launching Frontend...
+if exist "node_bin" set "PATH=%CD%\node_bin;%PATH%"
 
 if not exist node_modules (
-    echo 📦 Installing npm packages...
+    echo [INFO] Installing npm packages...
     call npm install
 )
 
-npm run dev
+call npm run dev
