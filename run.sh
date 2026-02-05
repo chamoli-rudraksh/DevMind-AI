@@ -24,15 +24,12 @@ fi
 
 # Check for Node.js (Auto-download if missing)
 if ! command -v npm &> /dev/null; then
-    # Check if we already have a local portable node
     if [ -f "./node_bin/bin/node" ]; then
         echo "✅ Found portable Node.js."
         export PATH="$PWD/node_bin/bin:$PATH"
     else
         echo "⚠️  Node.js not found. Downloading portable version (Linux x64)..."
         mkdir -p node_bin
-        
-        # Download Node v20 LTS for Linux
         wget -qO node.tar.xz https://nodejs.org/dist/v20.11.0/node-v20.11.0-linux-x64.tar.xz || curl -o node.tar.xz https://nodejs.org/dist/v20.11.0/node-v20.11.0-linux-x64.tar.xz
         
         echo "📂 Extracting Node.js..."
@@ -43,8 +40,6 @@ if ! command -v npm &> /dev/null; then
         echo "✅ Node.js installed locally!"
     fi
 else
-    # System node exists, but if we have local node, prefer it? 
-    # Usually standard is to use system if available, but let's check local first to match Windows logic
     if [ -d "./node_bin/bin" ]; then
         export PATH="$PWD/node_bin/bin:$PATH"
     fi
@@ -64,14 +59,11 @@ fi
 # --- 3. START BACKEND (Background Process) ---
 echo "🐍 Launching Backend Server..."
 
-# We don't open a new window in Linux usually (it's annoying), 
-# so we run it in the background like before.
 cd backend
 
 # Setup Python Venv if missing
 if [ ! -f "venv/bin/python" ]; then
     echo "📦 Creating virtual environment..."
-    # Clean up broken venv if it exists but python doesn't
     if [ -d "venv" ]; then rm -rf venv; fi
     python3 -m venv venv
 fi
@@ -82,7 +74,8 @@ echo "⬇️  Checking Python dependencies..."
 ./venv/bin/pip install -r requirements.txt
 
 # Start Uvicorn in background
-./venv/bin/python -m uvicorn main:app --reload --reload-exclude "workspace_data" --host 0.0.0.0 --port 8000 &
+# FIX: Removed --reload-exclude because workspace_data is now outside this folder
+./venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
 # --- 4. START FRONTEND ---
