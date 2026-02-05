@@ -12,18 +12,11 @@ if not exist "venv\Scripts\python.exe" (
 )
 
 echo [BACKEND] 2. Checking Dependencies...
-:: ✅ AUTO-UPDATE PIP (Silences the warning)
 .\venv\Scripts\python.exe -m pip install --upgrade pip
-
-:: Now install the rest
 .\venv\Scripts\pip install -r requirements.txt
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to install dependencies.
-    pause
-    exit /b
-)
 
 echo [BACKEND] 3. Starting Uvicorn...
+:: FIX: No exclude needed because data is now outside the folder!
 .\venv\Scripts\python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 if %errorlevel% neq 0 pause

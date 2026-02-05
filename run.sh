@@ -82,7 +82,7 @@ echo "⬇️  Checking Python dependencies..."
 ./venv/bin/pip install -r requirements.txt
 
 # Start Uvicorn in background
-./venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 &
+./venv/bin/python -m uvicorn main:app --reload --reload-exclude "workspace_data" --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
 # --- 4. START FRONTEND ---

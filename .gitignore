@@ -27,12 +27,12 @@ dist-ssr
 # 4. APP SPECIFIC (Temporary Files)
 # ----------------------
 # The folder created by your ingest.py script
+workspace_data/
+backend/workspace/
+
+# Old temp folders (keep just in case)
 temp_repo/
 backend/temp_repo/
-
-# The local SQLite database
-api_cache.db
-*.db
 
 # ----------------------
 # 5. LOGS & OS TRASH
