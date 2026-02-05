@@ -78,6 +78,7 @@ fi
 
 # Install Dependencies
 echo "⬇️  Checking Python dependencies..."
+./venv/bin/python -m pip install --upgrade pip
 ./venv/bin/pip install -r requirements.txt
 
 # Start Uvicorn in background

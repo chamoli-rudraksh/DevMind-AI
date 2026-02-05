@@ -111,7 +111,7 @@ async def analyze_security(request: SecurityRequest):
 
     try:
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-flash-latest',
             contents=prompt
         )
         
@@ -144,7 +144,7 @@ async def get_repo_overview(request: OverviewRequest):
     
     try:
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-flash-latest',
             contents=prompt
         )
         
@@ -166,7 +166,7 @@ async def chat_with_repo(request: ChatRequest):
     prompt = f"Answer: {request.message}. Code: {context[:50000]}"
     try:
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-flash-latest',
             contents=prompt
         )
         return {"response": response.text}
@@ -181,7 +181,7 @@ async def generate_docs(request: RepoRequest):
     prompt = f"Generate {request.doc_type}. Context: {context[:50000]}"
     try:
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-flash-latest',
             contents=prompt
         )
         return {"markdown": response.text}
