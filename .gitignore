@@ -1,4 +1,42 @@
-# Logs
+# ----------------------
+# 1. DEPENDENCIES (Never commit these)
+# ----------------------
+node_modules
+/backend/venv
+venv/
+__pycache__/
+*.pyc
+
+# ----------------------
+# 2. SECURITY (Critical)
+# ----------------------
+.env
+*.env
+.env.local
+.env.*.local
+backend/.env
+
+# ----------------------
+# 3. BUILD OUTPUTS
+# ----------------------
+dist
+dist-ssr
+*.local
+
+# ----------------------
+# 4. APP SPECIFIC (Temporary Files)
+# ----------------------
+# The folder created by your ingest.py script
+temp_repo/
+backend/temp_repo/
+
+# The local SQLite database
+api_cache.db
+*.db
+
+# ----------------------
+# 5. LOGS & OS TRASH
+# ----------------------
 logs
 *.log
 npm-debug.log*
@@ -7,12 +45,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
+# ----------------------
+# 6. IDE SETTINGS
+# ----------------------
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -22,5 +57,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-.env
-*.env
