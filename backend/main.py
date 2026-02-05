@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-import google.generativeai as genai
+from google import genai
 from ingest import clone_and_scan
 import os
 from dotenv import load_dotenv
@@ -9,6 +9,10 @@ import json
 import sqlite3
 import time
 import subprocess
+import warnings
+
+# Suppress minor warnings
+warnings.filterwarnings("ignore")
 
 load_dotenv()
 
@@ -26,19 +30,19 @@ api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     print("WARNING: GEMINI_API_KEY not found. Check your .env file!")
 
-genai.configure(api_key=api_key)
+# ✅ NEW: Initialize the Client
+client = genai.Client(api_key=api_key)
 
-# Startup Check
+# Startup: List available models (Optional debug step)
 print("\n🔍 CHECKING AVAILABLE MODELS...")
 try:
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
+    for m in client.models.list():
+        if "generateContent" in m.supported_actions:
             print(f"   ✅ {m.name}")
-except:
-    pass
+except Exception as e:
+    print(f"   ⚠️ Could not list models (Network issue?): {e}")
+print("---------------------------------------------------------\n")
 
-# Use the standard free model
-model = genai.GenerativeModel('gemini-flash-lite-latest')
 
 # --- 2. SMART PERSISTENT CACHE ---
 DB_FILE = "api_cache.db"
@@ -56,22 +60,19 @@ def init_db():
 def get_latest_commit_hash(repo_url):
     """
     Pings the remote git server to get the latest Commit Hash.
-    This allows us to invalidate the cache if the repo has changed.
     """
     try:
-        # git ls-remote returns the hash of the HEAD commit without downloading
+        # git ls-remote returns the hash of the HEAD commit
         result = subprocess.check_output(
             ["git", "ls-remote", repo_url, "HEAD"], 
             stderr=subprocess.STDOUT,
             timeout=5
         ).decode().split()[0]
         return result
-    except Exception as e:
-        print(f"⚠️ Could not get git hash (Offline?): {e}")
+    except Exception:
         return "latest" # Fallback if offline
 
 def get_smart_cache_key(prefix, repo_url):
-    """Generates a key that changes automatically when the repo updates."""
     commit_hash = get_latest_commit_hash(repo_url)
     return f"{prefix}_{repo_url}_{commit_hash}"
 
@@ -158,9 +159,7 @@ async def get_project_structure(request: OverviewRequest):
 
 @app.post("/api/analyze-security")
 async def analyze_security(request: SecurityRequest):
-    # SMART CACHE: Uses Commit Hash
     cache_key = get_smart_cache_key("security", request.repo_url)
-    
     cached = get_cached_response(cache_key)
     if cached: return cached
 
@@ -179,7 +178,11 @@ async def analyze_security(request: SecurityRequest):
     """
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-flash-latest',
+            contents=prompt
+        )
+        
         json_str = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(json_str)
         save_to_cache(cache_key, data)
@@ -191,9 +194,7 @@ async def analyze_security(request: SecurityRequest):
 
 @app.post("/overview")
 async def get_repo_overview(request: OverviewRequest):
-    # SMART CACHE: Uses Commit Hash
     cache_key = get_smart_cache_key("overview", request.url)
-    
     cached = get_cached_response(cache_key)
     if cached: return cached
 
@@ -212,7 +213,12 @@ async def get_repo_overview(request: OverviewRequest):
     """
     
     try:
-        response = model.generate_content(prompt)
+        # ✅ NEW: Client Call
+        response = client.models.generate_content(
+            model='gemini-flash-latest',
+            contents=prompt
+        )
+        
         clean_text = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(clean_text)
         save_to_cache(cache_key, data)
@@ -230,7 +236,11 @@ async def chat_with_repo(request: ChatRequest):
     context = ensure_context(request.repo_url)
     prompt = f"Answer: {request.message}. Code: {context[:50000]}"
     try:
-        response = model.generate_content(prompt)
+        # ✅ NEW: Client Call
+        response = client.models.generate_content(
+            model='gemini-flash-latest',
+            contents=prompt
+        )
         return {"response": response.text}
     except Exception:
         return {"response": "System Overload (Rate Limit). Please wait 30s."}
@@ -240,7 +250,11 @@ async def generate_docs(request: RepoRequest):
     context = ensure_context(request.url)
     prompt = f"Generate {request.doc_type}. Context: {context[:50000]}"
     try:
-        response = model.generate_content(prompt)
+        # ✅ NEW: Client Call
+        response = client.models.generate_content(
+            model='gemini-flash-latest',
+            contents=prompt
+        )
         return {"markdown": response.text}
     except Exception as e:
         return {"markdown": f"Error: {str(e)}"}
