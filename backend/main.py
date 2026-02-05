@@ -6,9 +6,6 @@ from ingest import clone_and_scan
 import os
 from dotenv import load_dotenv
 import json
-import sqlite3
-import time
-import subprocess
 import warnings
 
 # Suppress minor warnings
@@ -30,89 +27,25 @@ api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     print("WARNING: GEMINI_API_KEY not found. Check your .env file!")
 
-# ✅ NEW: Initialize the Client
+# Initialize the Client
 client = genai.Client(api_key=api_key)
 
-# Startup: List available models (Optional debug step)
-print("\n🔍 CHECKING AVAILABLE MODELS...")
-try:
-    for m in client.models.list():
-        if "generateContent" in m.supported_actions:
-            print(f"   ✅ {m.name}")
-except Exception as e:
-    print(f"   ⚠️ Could not list models (Network issue?): {e}")
-print("---------------------------------------------------------\n")
-
-
-# --- 2. SMART PERSISTENT CACHE ---
-DB_FILE = "api_cache.db"
-
-def init_db():
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS responses (
-                cache_key TEXT PRIMARY KEY,
-                data TEXT,
-                timestamp REAL
-            )
-        """)
-
-def get_latest_commit_hash(repo_url):
-    """
-    Pings the remote git server to get the latest Commit Hash.
-    """
-    try:
-        # git ls-remote returns the hash of the HEAD commit
-        result = subprocess.check_output(
-            ["git", "ls-remote", repo_url, "HEAD"], 
-            stderr=subprocess.STDOUT,
-            timeout=5
-        ).decode().split()[0]
-        return result
-    except Exception:
-        return "latest" # Fallback if offline
-
-def get_smart_cache_key(prefix, repo_url):
-    commit_hash = get_latest_commit_hash(repo_url)
-    return f"{prefix}_{repo_url}_{commit_hash}"
-
-def get_cached_response(key: str):
-    try:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.execute("SELECT data FROM responses WHERE cache_key = ?", (key,))
-            row = cursor.fetchone()
-            if row:
-                print(f"⚡ Smart Cache Hit: {key}")
-                return json.loads(row[0])
-    except Exception:
-        pass
-    return None
-
-def save_to_cache(key: str, data: dict):
-    try:
-        with sqlite3.connect(DB_FILE) as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO responses (cache_key, data, timestamp) VALUES (?, ?, ?)",
-                (key, json.dumps(data), time.time())
-            )
-    except Exception:
-        pass
-
-init_db()
-
-# --- Helper State ---
+# --- 2. IN-MEMORY STATE (No Database) ---
+# We keep the code in RAM only while the server is running.
+# If you restart the server, it clears.
 CURRENT_CODE_CONTEXT = ""
 CURRENT_REPO_URL = ""
 
 def ensure_context(url):
     global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL
+    # Only clone if it's a new URL or we haven't cloned yet
     if url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
-        print(f"📂 Cloning: {url}")
+        print(f"📂 Cloning and Scanning: {url}")
         CURRENT_CODE_CONTEXT = clone_and_scan(url)
         CURRENT_REPO_URL = url
     return CURRENT_CODE_CONTEXT
 
-# --- Request Models ---
+# --- 3. REQUEST MODELS ---
 class OverviewRequest(BaseModel):
     url: str
 
@@ -127,7 +60,7 @@ class ChatRequest(BaseModel):
     message: str
     repo_url: str
 
-# --- ROUTES ---
+# --- 4. ROUTES ---
 
 @app.post("/structure")
 async def get_project_structure(request: OverviewRequest):
@@ -159,12 +92,11 @@ async def get_project_structure(request: OverviewRequest):
 
 @app.post("/api/analyze-security")
 async def analyze_security(request: SecurityRequest):
-    cache_key = get_smart_cache_key("security", request.repo_url)
-    cached = get_cached_response(cache_key)
-    if cached: return cached
-
+    # 1. Get Code
     context = ensure_context(request.repo_url)
 
+    # 2. Ask Gemini
+    print("🛡️  Running Security Analysis...")
     prompt = f"""
     You are a Senior Security Engineer. Analyze the codebase below for security vulnerabilities.
     Focus on: Hardcoded secrets, SQL injection, XSS, dangerous dependencies.
@@ -179,14 +111,13 @@ async def analyze_security(request: SecurityRequest):
 
     try:
         response = client.models.generate_content(
-            model='gemini-flash-latest',
+            model='gemini-1.5-flash',
             contents=prompt
         )
         
+        # Clean response
         json_str = response.text.replace('```json', '').replace('```', '').strip()
-        data = json.loads(json_str)
-        save_to_cache(cache_key, data)
-        return data
+        return json.loads(json_str)
 
     except Exception as e:
         print(f"Security Scan Error: {e}")
@@ -194,12 +125,11 @@ async def analyze_security(request: SecurityRequest):
 
 @app.post("/overview")
 async def get_repo_overview(request: OverviewRequest):
-    cache_key = get_smart_cache_key("overview", request.url)
-    cached = get_cached_response(cache_key)
-    if cached: return cached
-
+    # 1. Get Code
     context = ensure_context(request.url)
 
+    # 2. Ask Gemini
+    print("📊 Generating Overview...")
     prompt = f"""
     You are a Senior Tech Lead. Analyze the codebase below and return a Strict JSON summary.
     Required JSON Structure:
@@ -213,19 +143,16 @@ async def get_repo_overview(request: OverviewRequest):
     """
     
     try:
-        # ✅ NEW: Client Call
         response = client.models.generate_content(
-            model='gemini-flash-latest',
+            model='gemini-1.5-flash',
             contents=prompt
         )
         
         clean_text = response.text.replace('```json', '').replace('```', '').strip()
-        data = json.loads(clean_text)
-        save_to_cache(cache_key, data)
-        return data
+        return json.loads(clean_text)
     except Exception:
         return {
-            "description": "Analysis Failed (Busy). Try again.",
+            "description": "Analysis Failed. Try again.",
             "tech_stack": [],
             "key_features": [],
             "stats": {"files": "?", "complexity": "?"}
@@ -234,25 +161,27 @@ async def get_repo_overview(request: OverviewRequest):
 @app.post("/chat")
 async def chat_with_repo(request: ChatRequest):
     context = ensure_context(request.repo_url)
+    print(f"💬 Chatting: {request.message[:20]}...")
+    
     prompt = f"Answer: {request.message}. Code: {context[:50000]}"
     try:
-        # ✅ NEW: Client Call
         response = client.models.generate_content(
-            model='gemini-flash-latest',
+            model='gemini-1.5-flash',
             contents=prompt
         )
         return {"response": response.text}
     except Exception:
-        return {"response": "System Overload (Rate Limit). Please wait 30s."}
+        return {"response": "System Overload. Please wait."}
 
 @app.post("/generate")
 async def generate_docs(request: RepoRequest):
     context = ensure_context(request.url)
+    print(f"📝 Generating {request.doc_type}...")
+    
     prompt = f"Generate {request.doc_type}. Context: {context[:50000]}"
     try:
-        # ✅ NEW: Client Call
         response = client.models.generate_content(
-            model='gemini-flash-latest',
+            model='gemini-1.5-flash',
             contents=prompt
         )
         return {"markdown": response.text}
