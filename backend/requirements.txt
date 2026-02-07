@@ -5,6 +5,6 @@ requests>=2.31.0
 google-genai>=0.3.0
 pydantic>=2.9.0
 gitpython>=3.1.41
-bandit>=1.7.9
-detect-secrets
-safety
+bandit>=1.7.5
+detect-secrets>=1.4.0
+safety>=2.3.5

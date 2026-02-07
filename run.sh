@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# Function to kill backend when script exits
 cleanup() {
     echo "🛑 Shutting down..."
     if [ -n "$BACKEND_PID" ]; then
@@ -13,16 +12,12 @@ trap cleanup SIGINT
 
 echo "🚀 Starting DevMind-AI..."
 
-# --- 1. CHECK PREREQUISITES ---
-
-# Check for Python
 if ! command -v python3 &> /dev/null; then
     echo "❌ [ERROR] Python3 is not installed!"
     echo "👉 Please install it using: sudo apt install python3"
     exit 1
 fi
 
-# Check for Node.js (Auto-download if missing)
 if ! command -v npm &> /dev/null; then
     if [ -f "./node_bin/bin/node" ]; then
         echo "✅ Found portable Node.js."
@@ -45,7 +40,6 @@ else
     fi
 fi
 
-# --- 2. CHECK FOR .ENV ---
 if [ ! -f "backend/.env" ]; then
     echo "⚠️  [WARNING] .env file not found in backend!"
     echo "📄 Creating backend/.env for you..."
@@ -56,29 +50,25 @@ if [ ! -f "backend/.env" ]; then
     exit 1
 fi
 
-# --- 3. START BACKEND (Background Process) ---
 echo "🐍 Launching Backend Server..."
 
 cd backend
 
-# Setup Python Venv if missing
 if [ ! -f "venv/bin/python" ]; then
     echo "📦 Creating virtual environment..."
     if [ -d "venv" ]; then rm -rf venv; fi
     python3 -m venv venv
 fi
 
-# Install Dependencies
-echo "⬇️  Checking Python dependencies..."
-./venv/bin/python -m pip install --upgrade pip
-./venv/bin/pip install -r requirements.txt
+export PATH="$PWD/venv/bin:$PATH"
 
-# Start Uvicorn in background
-# FIX: Removed --reload-exclude because workspace_data is now outside this folder
-./venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 &
+echo "⬇️  Checking Python dependencies..."
+pip install --upgrade pip
+pip install -r requirements.txt
+
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
-# --- 4. START FRONTEND ---
 cd ..
 echo "⚛️  Launching Frontend..."
 
@@ -89,5 +79,4 @@ fi
 
 npm run dev
 
-# Keep script running
 wait
