@@ -7,6 +7,10 @@ import os
 from dotenv import load_dotenv
 import json
 import warnings
+import sys
+
+# Ensure we can import from the security folder
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from security.bandit_analyzer import run_bandit_analysis
 from security.detect_secrets_analyzer import run_detect_secrets_analysis
@@ -55,6 +59,45 @@ def ensure_context(url):
             
     return CURRENT_CODE_CONTEXT
 
+# --- HELPER: Generate Markdown Report ---
+def generate_security_report_markdown(issues):
+    """
+    Generates markdown content for SECURITY_REPORT.md based on the list of issues.
+    """
+    if not issues:
+        return ""
+
+    report_content = "# Security Report\n\n"
+    report_content += "This report summarizes the security findings for the analyzed repository.\n\n"
+
+    # Group issues by severity
+    critical_issues = [i for i in issues if i.get('severity') == 'CRITICAL']
+    high_issues = [i for i in issues if i.get('severity') == 'HIGH']
+    medium_issues = [i for i in issues if i.get('severity') == 'MEDIUM']
+    low_issues = [i for i in issues if i.get('severity') == 'LOW']
+    
+    # Catch-all for tools that use different severity names
+    known_severities = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
+    other_issues = [i for i in issues if i.get('severity') not in known_severities]
+
+    def add_section(issue_list, title):
+        nonlocal report_content
+        if issue_list:
+            report_content += f"## {title} Issues\n\n"
+            for issue in issue_list:
+                report_content += f"### {issue.get('title', 'N/A')}\n"
+                report_content += f"- **Severity:** {issue.get('severity', 'N/A')}\n"
+                report_content += f"- **Location:** {issue.get('location', 'N/A')}\n"
+                report_content += f"- **Description:** {issue.get('description', 'N/A')}\n\n"
+
+    add_section(critical_issues, "CRITICAL")
+    add_section(high_issues, "HIGH")
+    add_section(medium_issues, "MEDIUM")
+    add_section(low_issues, "LOW")
+    add_section(other_issues, "OTHER")
+
+    return report_content
+
 # --- MODELS ---
 class OverviewRequest(BaseModel):
     url: str
@@ -74,10 +117,7 @@ class ChatRequest(BaseModel):
 
 @app.post("/structure")
 async def get_project_structure(request: OverviewRequest):
-    # Ensure we have the latest path
     ensure_context(request.url)
-    
-    # Use the ACTIVE path, not "temp_repo"
     repo_path = CURRENT_REPO_PATH
     
     if not repo_path or not os.path.exists(repo_path):
@@ -109,45 +149,59 @@ async def analyze_security(request: SecurityRequest):
 
     print("🛡️  Running Security Analysis...")
     
+    # 1. Run Bandit (Python Static Analysis)
     bandit_issues = []
     if CURRENT_REPO_PATH and os.path.exists(CURRENT_REPO_PATH):
-        print(f"Running Bandit on {CURRENT_REPO_PATH}...")
-        bandit_issues_raw = run_bandit_analysis(CURRENT_REPO_PATH)
-        for issue in bandit_issues_raw:
-            bandit_issues.append({
-                "severity": issue['severity'],
-                "title": f"Bandit: {issue['title']}",
-                "location": issue['location'],
-                "description": f"{issue['description']} (Confidence: {issue['confidence']}) Code: {issue['code']}"
-            })
-            
+        try:
+            print(f"Running Bandit on {CURRENT_REPO_PATH}...")
+            bandit_raw = run_bandit_analysis(CURRENT_REPO_PATH)
+            for issue in bandit_raw:
+                bandit_issues.append({
+                    "severity": issue.get('severity', 'MEDIUM'),
+                    "title": f"Bandit: {issue.get('title', 'Issue')}",
+                    "location": issue.get('location', 'Unknown'),
+                    "description": f"{issue.get('description', '')} (Confidence: {issue.get('confidence', 'Unknown')})"
+                })
+        except Exception as e:
+            print(f"⚠️ Bandit failed: {e}")
+
+    # 2. Run Detect-Secrets
     secrets_issues = []
     if CURRENT_REPO_PATH and os.path.exists(CURRENT_REPO_PATH):
-        print(f"Running Detect-Secrets on {CURRENT_REPO_PATH}...")
-        secrets_issues_raw = run_detect_secrets_analysis(CURRENT_REPO_PATH)
-        for issue in secrets_issues_raw:
-            secrets_issues.append({
-                "severity": issue['severity'],
-                "title": f"Secret: {issue['title']}",
-                "location": issue['location'],
-                "description": f"{issue['description']}"
-            })
-            
+        try:
+            print(f"Running Detect-Secrets on {CURRENT_REPO_PATH}...")
+            secrets_raw = run_detect_secrets_analysis(CURRENT_REPO_PATH)
+            for issue in secrets_raw:
+                secrets_issues.append({
+                    "severity": "CRITICAL",
+                    "title": f"Secret: {issue.get('title', 'Exposure')}",
+                    "location": issue.get('location', 'Unknown'),
+                    "description": issue.get('description', 'Potential hardcoded secret found.')
+                })
+        except Exception as e:
+            print(f"⚠️ Detect-Secrets failed: {e}")
+
+    # 3. Run Safety (Dependency Check)
     safety_issues = []
     if CURRENT_REPO_PATH and os.path.exists(CURRENT_REPO_PATH):
-        print(f"Running Safety on {CURRENT_REPO_PATH}...")
-        safety_issues_raw = run_safety_analysis(CURRENT_REPO_PATH)
-        for issue in safety_issues_raw:
-            safety_issues.append({
-                "severity": issue['severity'],
-                "title": f"Safety: {issue['title']}",
-                "location": issue['location'],
-                "description": f"{issue['description']}"
-            })
-    
+        try:
+            print(f"Running Safety on {CURRENT_REPO_PATH}...")
+            safety_raw = run_safety_analysis(CURRENT_REPO_PATH)
+            for issue in safety_raw:
+                safety_issues.append({
+                    "severity": "HIGH",
+                    "title": f"Safety: {issue.get('title', 'Vulnerable Dependency')}",
+                    "location": issue.get('location', 'requirements.txt'),
+                    "description": issue.get('description', '')
+                })
+        except Exception as e:
+            print(f"⚠️ Safety failed: {e}")
+
+    # 4. Run Gemini AI Analysis
+    print("🤖 Asking AI...")
     prompt = f"""
     You are a Senior Security Engineer. Analyze the codebase below for security vulnerabilities.
-    Focus on: Hardcoded secrets, SQL injection, XSS, dangerous dependencies.
+    Focus on logic errors, missing authorizations, and bad practices that static tools might miss.
     
     CODEBASE CONTEXT:
     {context[:100000]}
@@ -156,30 +210,34 @@ async def analyze_security(request: SecurityRequest):
     Each item must have: "severity" (CRITICAL, HIGH, MEDIUM, LOW), "title", "location", and "description".
     """
 
+    ai_issues = []
     try:
         response = client.models.generate_content(
             model='gemini-flash-latest',
             contents=prompt
         )
+        # Robust JSON cleaning
         json_str = response.text.replace('```json', '').replace('```', '').strip()
-        ai_issues = json.loads(json_str).get("issues", [])
-        
-        all_issues = bandit_issues + secrets_issues + safety_issues + ai_issues
-        
-        if all_issues:
-            report_markdown = generate_security_report_markdown(all_issues)
-            report_path = os.path.join(CURRENT_REPO_PATH, "SECURITY_REPORT.md")
-            try:
-                with open(report_path, "w") as f:
-                    f.write(report_markdown)
-                print(f"Generated SECURITY_REPORT.md at {report_path}")
-            except IOError as io_e:
-                print(f"Error writing SECURITY_REPORT.md: {io_e}")
-
-        return {"issues": all_issues}
+        if json_str:
+            ai_data = json.loads(json_str)
+            ai_issues = ai_data.get("issues", [])
     except Exception as e:
-        print(f"Error: {e}")
-        return {"issues": bandit_issues}
+        print(f"⚠️ AI Analysis failed: {e}")
+
+    # 5. Combine & Report
+    all_issues = bandit_issues + secrets_issues + safety_issues + ai_issues
+    
+    if all_issues and CURRENT_REPO_PATH:
+        try:
+            report_md = generate_security_report_markdown(all_issues)
+            report_path = os.path.join(CURRENT_REPO_PATH, "SECURITY_REPORT.md")
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(report_md)
+            print(f"✅ Generated SECURITY_REPORT.md at {report_path}")
+        except Exception as e:
+            print(f"Error saving report: {e}")
+
+    return {"issues": all_issues}
 
 @app.post("/overview")
 async def get_repo_overview(request: OverviewRequest):
@@ -232,43 +290,6 @@ async def generate_docs(request: RepoRequest):
         return {"markdown": response.text}
     except Exception as e:
         return {"markdown": f"Error: {str(e)}"}
-
-        return {"markdown": f"Error: {str(e)}"}
-
-def generate_security_report_markdown(issues):
-    """
-    Generates markdown content for SECURITY_REPORT.md based on the list of issues.
-    """
-    if not issues:
-        return ""
-
-    report_content = "# Security Report\n\n"
-    report_content += "This report summarizes the security findings for the analyzed repository.\n\n"
-
-    # Group issues by severity
-    critical_issues = [i for i in issues if i['severity'] == 'CRITICAL']
-    high_issues = [i for i in issues if i['severity'] == 'HIGH']
-    medium_issues = [i for i in issues if i['severity'] == 'MEDIUM']
-    low_issues = [i for i in issues if i['severity'] == 'LOW']
-    unknown_issues = [i for i in issues if i['severity'] not in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']]
-
-    def add_issues_to_report(issue_list, severity_title):
-        nonlocal report_content
-        if issue_list:
-            report_content += f"## {severity_title} Issues\n\n"
-            for issue in issue_list:
-                report_content += f"### {issue.get('title', 'N/A')}\n"
-                report_content += f"- **Severity:** {issue.get('severity', 'N/A')}\n"
-                report_content += f"- **Location:** {issue.get('location', 'N/A')}\n"
-                report_content += f"- **Description:** {issue.get('description', 'N/A')}\n\n"
-
-    add_issues_to_report(critical_issues, "CRITICAL")
-    add_issues_to_report(high_issues, "HIGH")
-    add_issues_to_report(medium_issues, "MEDIUM")
-    add_issues_to_report(low_issues, "LOW")
-    add_issues_to_report(unknown_issues, "OTHER")
-
-    return report_content
 
 if __name__ == "__main__":
     import uvicorn
