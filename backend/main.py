@@ -1,12 +1,17 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, field_validator
 from google import genai
 from ingest import clone_and_scan
 import os
+import git
+import subprocess
 from dotenv import load_dotenv
 import json
 import warnings
+import re
+from datetime import datetime
 
 from security.bandit_analyzer import run_bandit_analysis
 from security.detect_secrets_analyzer import run_detect_secrets_analysis
@@ -15,261 +20,560 @@ from security.safety_analyzer import run_safety_analysis
 warnings.filterwarnings("ignore")
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="DevMind AI API", version="1.0.0")
 
+# CORS - configurable via environment variable
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
-    print("WARNING: GEMINI_API_KEY not found.")
+    print("WARNING: GEMINI_API_KEY not found. AI features will be disabled.")
 
-client = genai.Client(api_key=api_key)
+client = genai.Client(api_key=api_key) if api_key else None
 
 # --- GLOBAL STATE ---
 CURRENT_CODE_CONTEXT = ""
 CURRENT_REPO_URL = ""
-CURRENT_REPO_PATH = ""  # New: Tracks the active folder path
+CURRENT_REPO_PATH = ""
 
-def ensure_context(url):
+
+def is_valid_github_url(url: str) -> bool:
+    return bool(re.match(r"^https?://github\.com/[\w\-\.]+/[\w\-\.]+", url))
+
+
+def is_local_path(url: str) -> bool:
+    return url.startswith("/") or url.startswith("./") or url.startswith("~")
+
+
+def ensure_context(url: str):
     global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL, CURRENT_REPO_PATH
-    
+
     if url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
         print(f"🔄 Switching context to: {url}")
-        
-        # Calling the updated ingest function
         code, path = clone_and_scan(url)
-        
-        if path is None: # Clone failed
+
+        if path is None:
             print("❌ Clone failed!")
             CURRENT_CODE_CONTEXT = "Error: Repository could not be cloned."
-            CURRENT_REPO_PATH = "" 
+            CURRENT_REPO_PATH = ""
         else:
             CURRENT_CODE_CONTEXT = code
-            CURRENT_REPO_PATH = path # Save the new unique path
+            CURRENT_REPO_PATH = path
             CURRENT_REPO_URL = url
-            
+
     return CURRENT_CODE_CONTEXT
+
+
+def ai_generate(prompt: str, fallback=None):
+    """Helper to call Gemini with proper error handling."""
+    if not client:
+        return fallback or {}
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+        return response.text
+    except Exception as e:
+        print(f"Gemini error: {e}")
+        return None
+
 
 # --- MODELS ---
 class OverviewRequest(BaseModel):
     url: str
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v):
+        if not v or not v.strip():
+            raise ValueError("URL cannot be empty")
+        return v.strip()
+
+
 class SecurityRequest(BaseModel):
     repo_url: str
+
+    @field_validator("repo_url")
+    @classmethod
+    def validate_url(cls, v):
+        if not v or not v.strip():
+            raise ValueError("URL cannot be empty")
+        return v.strip()
+
 
 class RepoRequest(BaseModel):
     url: str
     doc_type: str = "README.md"
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v):
+        if not v or not v.strip():
+            raise ValueError("URL cannot be empty")
+        return v.strip()
+
+
 class ChatRequest(BaseModel):
     message: str
     repo_url: str
 
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Message cannot be empty")
+        return v.strip()
+
+
+class QualityRequest(BaseModel):
+    repo_url: str
+
+
+class TestGenRequest(BaseModel):
+    repo_url: str
+    framework: str = "auto"
+
+
+class GitInsightsRequest(BaseModel):
+    repo_url: str
+
+
 # --- ROUTES ---
+
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "ai_enabled": client is not None,
+        "version": "1.0.0",
+    }
+
 
 @app.post("/structure")
 async def get_project_structure(request: OverviewRequest):
-    # Ensure we have the latest path
     ensure_context(request.url)
-    
-    # Use the ACTIVE path, not "temp_repo"
     repo_path = CURRENT_REPO_PATH
-    
+
     if not repo_path or not os.path.exists(repo_path):
         return {"structure": [{"name": "Error: Repo not found", "type": "file"}]}
-    
-    ignore_dirs = {'.git', 'node_modules', '__pycache__', 'dist', 'build', 'venv', '.idea', '.vscode'}
-    
+
+    ignore_dirs = {
+        ".git",
+        "node_modules",
+        "__pycache__",
+        "dist",
+        "build",
+        "venv",
+        ".idea",
+        ".vscode",
+        ".mypy_cache",
+        ".pytest_cache",
+        "coverage",
+        ".next",
+    }
+
     def build_tree(path):
         name = os.path.basename(path)
         item = {"name": name, "type": "file"}
-        
+
         if os.path.isdir(path):
             item["type"] = "folder"
             item["children"] = []
             try:
-                for entry in sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower())):
-                    if entry.name in ignore_dirs: continue
+                for entry in sorted(
+                    os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower())
+                ):
+                    if entry.name in ignore_dirs:
+                        continue
                     item["children"].append(build_tree(entry.path))
-            except PermissionError: pass
+            except PermissionError:
+                pass
         return item
 
     tree = build_tree(repo_path)
     return {"structure": tree.get("children", [])}
 
+
 @app.post("/api/analyze-security")
 async def analyze_security(request: SecurityRequest):
     context = ensure_context(request.repo_url)
-    if "Error:" in context[:100]: return {"issues": []}
+    if "Error:" in context[:100]:
+        return {"issues": []}
 
     print("🛡️  Running Security Analysis...")
-    
+
     bandit_issues = []
     if CURRENT_REPO_PATH and os.path.exists(CURRENT_REPO_PATH):
-        print(f"Running Bandit on {CURRENT_REPO_PATH}...")
         bandit_issues_raw = run_bandit_analysis(CURRENT_REPO_PATH)
         for issue in bandit_issues_raw:
-            bandit_issues.append({
-                "severity": issue['severity'],
-                "title": f"Bandit: {issue['title']}",
-                "location": issue['location'],
-                "description": f"{issue['description']} (Confidence: {issue['confidence']}) Code: {issue['code']}"
-            })
-            
+            bandit_issues.append(
+                {
+                    "severity": issue["severity"],
+                    "title": f"Bandit: {issue['title']}",
+                    "location": issue["location"],
+                    "description": f"{issue['description']} (Confidence: {issue['confidence']})",
+                }
+            )
+
     secrets_issues = []
     if CURRENT_REPO_PATH and os.path.exists(CURRENT_REPO_PATH):
-        print(f"Running Detect-Secrets on {CURRENT_REPO_PATH}...")
         secrets_issues_raw = run_detect_secrets_analysis(CURRENT_REPO_PATH)
         for issue in secrets_issues_raw:
-            secrets_issues.append({
-                "severity": issue['severity'],
-                "title": f"Secret: {issue['title']}",
-                "location": issue['location'],
-                "description": f"{issue['description']}"
-            })
-            
+            secrets_issues.append(
+                {
+                    "severity": issue["severity"],
+                    "title": f"Secret: {issue['title']}",
+                    "location": issue["location"],
+                    "description": issue["description"],
+                }
+            )
+
     safety_issues = []
     if CURRENT_REPO_PATH and os.path.exists(CURRENT_REPO_PATH):
-        print(f"Running Safety on {CURRENT_REPO_PATH}...")
         safety_issues_raw = run_safety_analysis(CURRENT_REPO_PATH)
         for issue in safety_issues_raw:
-            safety_issues.append({
-                "severity": issue['severity'],
-                "title": f"Safety: {issue['title']}",
-                "location": issue['location'],
-                "description": f"{issue['description']}"
-            })
-    
+            safety_issues.append(
+                {
+                    "severity": issue["severity"],
+                    "title": f"Safety: {issue['title']}",
+                    "location": issue["location"],
+                    "description": issue["description"],
+                }
+            )
+
+    ai_issues = []
     prompt = f"""
     You are a Senior Security Engineer. Analyze the codebase below for security vulnerabilities.
-    Focus on: Hardcoded secrets, SQL injection, XSS, dangerous dependencies.
-    
+    Focus on: Hardcoded secrets, SQL injection, XSS, CSRF, insecure deserialization, dangerous dependencies.
+
     CODEBASE CONTEXT:
-    {context[:100000]}
-    
-    Return ONLY a JSON object with a key "issues" containing a list. 
+    {context[:80000]}
+
+    Return ONLY a JSON object with a key "issues" containing a list.
     Each item must have: "severity" (CRITICAL, HIGH, MEDIUM, LOW), "title", "location", and "description".
+    Return at most 10 AI-detected issues. If none found, return {{"issues": []}}.
     """
+    raw = ai_generate(prompt)
+    if raw:
+        try:
+            json_str = raw.replace("```json", "").replace("```", "").strip()
+            ai_issues = json.loads(json_str).get("issues", [])
+        except Exception:
+            pass
 
-    try:
-        response = client.models.generate_content(
-            model='gemini-flash-latest',
-            contents=prompt
-        )
-        json_str = response.text.replace('```json', '').replace('```', '').strip()
-        ai_issues = json.loads(json_str).get("issues", [])
-        
-        all_issues = bandit_issues + secrets_issues + safety_issues + ai_issues
-        
-        if all_issues:
-            report_markdown = generate_security_report_markdown(all_issues)
-            report_path = os.path.join(CURRENT_REPO_PATH, "SECURITY_REPORT.md")
-            try:
-                with open(report_path, "w") as f:
-                    f.write(report_markdown)
-                print(f"Generated SECURITY_REPORT.md at {report_path}")
-            except IOError as io_e:
-                print(f"Error writing SECURITY_REPORT.md: {io_e}")
+    all_issues = bandit_issues + secrets_issues + safety_issues + ai_issues
 
-        return {"issues": all_issues}
-    except Exception as e:
-        print(f"Error: {e}")
-        return {"issues": bandit_issues}
+    if all_issues and CURRENT_REPO_PATH:
+        report_markdown = generate_security_report_markdown(all_issues)
+        report_path = os.path.join(CURRENT_REPO_PATH, "SECURITY_REPORT.md")
+        try:
+            with open(report_path, "w") as f:
+                f.write(report_markdown)
+        except IOError:
+            pass
+
+    return {"issues": all_issues}
+
 
 @app.post("/overview")
 async def get_repo_overview(request: OverviewRequest):
     context = ensure_context(request.url)
-    
+
     print("📊 Generating Overview...")
     prompt = f"""
-    You are a Senior Tech Lead. Analyze the codebase below and return a Strict JSON summary.
+    You are a Senior Tech Lead. Analyze the codebase below and return a STRICT JSON summary.
     Required JSON Structure:
     {{
-        "description": "Summary",
-        "tech_stack": ["List"],
-        "key_features": ["List"],
-        "stats": {{ "files": "count", "complexity": "Low/Medium/High" }}
+        "description": "2-3 sentence summary of what this project does",
+        "tech_stack": ["list", "of", "technologies"],
+        "key_features": ["list", "of", "key", "features"],
+        "stats": {{ "files": "estimated count", "complexity": "Low/Medium/High", "lines_of_code": "estimate" }}
     }}
-    Context: {context[:100000]}
+    Context: {context[:80000]}
+    Return ONLY valid JSON, no markdown.
     """
-    
-    try:
-        response = client.models.generate_content(
-            model='gemini-flash-latest',
-            contents=prompt
-        )
-        return json.loads(response.text.replace('```json', '').replace('```', '').strip())
-    except Exception:
-        return {"description": "Analysis Failed.", "tech_stack": [], "key_features": [], "stats": {}}
+
+    raw = ai_generate(prompt)
+    if raw:
+        try:
+            return json.loads(raw.replace("```json", "").replace("```", "").strip())
+        except Exception:
+            pass
+    return {
+        "description": "Analysis failed. Please check your API key.",
+        "tech_stack": [],
+        "key_features": [],
+        "stats": {},
+    }
+
 
 @app.post("/chat")
 async def chat_with_repo(request: ChatRequest):
     context = ensure_context(request.repo_url)
-    print(f"💬 Chatting...")
-    try:
-        response = client.models.generate_content(
-            model='gemini-flash-latest',
-            contents=f"Answer: {request.message}. Code: {context[:50000]}"
-        )
-        return {"response": response.text}
-    except Exception:
-        return {"response": "Error processing chat."}
+    print(f"💬 Chatting: {request.message[:50]}...")
+
+    prompt = f"""You are an expert code assistant that has fully analyzed a codebase.
+Answer the user's question based on the codebase context below.
+Be specific, concise, and use markdown formatting with code blocks where helpful.
+
+User question: {request.message}
+
+Codebase context:
+{context[:60000]}"""
+
+    raw = ai_generate(prompt)
+    return {"response": raw or "I couldn't generate a response. Please check your API key."}
+
 
 @app.post("/generate")
 async def generate_docs(request: RepoRequest):
     context = ensure_context(request.url)
     print(f"📝 Generating {request.doc_type}...")
+
+    doc_prompts = {
+        "README.md": "Generate a professional, comprehensive README.md with badges, installation, usage examples, and contributing guide.",
+        "CONTRIBUTING.md": "Generate a detailed CONTRIBUTING.md with setup instructions, PR process, coding standards, and commit message format.",
+        "ARCHITECTURE.md": "Generate a technical ARCHITECTURE.md documenting system design, component interactions, data flow, and technical decisions.",
+        "API.md": "Generate a comprehensive API.md documenting all endpoints, request/response schemas, authentication, and usage examples.",
+    }
+
+    instruction = doc_prompts.get(request.doc_type, f"Generate {request.doc_type}")
+    prompt = f"""{instruction}
+Output only the markdown content, no additional commentary.
+
+Codebase context:
+{context[:60000]}"""
+
+    raw = ai_generate(prompt)
+    return {"markdown": raw or f"# {request.doc_type}\n\nGeneration failed."}
+
+
+@app.post("/api/analyze-quality")
+async def analyze_code_quality(request: QualityRequest):
+    """Analyze code quality metrics using AI."""
+    context = ensure_context(request.repo_url)
+    if "Error:" in context[:100]:
+        return {"error": "Could not load repository"}
+
+    print("🔍 Analyzing Code Quality...")
+
+    prompt = f"""You are a senior software engineer reviewing code quality.
+Analyze this codebase and return a JSON object with the following structure:
+{{
+    "overall_score": <number 0-100>,
+    "grade": "<A/B/C/D/F>",
+    "summary": "<2-3 sentence summary>",
+    "metrics": {{
+        "maintainability": {{ "score": <0-100>, "label": "<Excellent/Good/Fair/Poor>", "notes": "<brief note>" }},
+        "complexity": {{ "score": <0-100>, "label": "<Low/Medium/High/Very High>", "notes": "<brief note>" }},
+        "test_coverage_estimate": {{ "score": <0-100>, "label": "<Excellent/Good/Fair/None>", "notes": "<brief note>" }},
+        "documentation": {{ "score": <0-100>, "label": "<Excellent/Good/Fair/Poor>", "notes": "<brief note>" }},
+        "code_duplication": {{ "score": <0-100>, "label": "<Low/Medium/High>", "notes": "<brief note>" }},
+        "security_posture": {{ "score": <0-100>, "label": "<Strong/Moderate/Weak>", "notes": "<brief note>" }}
+    }},
+    "top_issues": ["<issue 1>", "<issue 2>", "<issue 3>"],
+    "top_strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
+    "recommendations": ["<recommendation 1>", "<recommendation 2>", "<recommendation 3>"]
+}}
+
+Codebase:
+{context[:80000]}
+
+Return ONLY valid JSON."""
+
+    raw = ai_generate(prompt)
+    if raw:
+        try:
+            return json.loads(raw.replace("```json", "").replace("```", "").strip())
+        except Exception:
+            pass
+    return {"error": "Quality analysis failed"}
+
+
+@app.post("/api/generate-tests")
+async def generate_tests(request: TestGenRequest):
+    """Generate unit tests for the analyzed codebase."""
+    context = ensure_context(request.repo_url)
+    if "Error:" in context[:100]:
+        return {"error": "Could not load repository"}
+
+    print(f"🧪 Generating Tests (framework: {request.framework})...")
+
+    framework_hint = ""
+    if request.framework != "auto":
+        framework_hint = f"Use the {request.framework} testing framework."
+    else:
+        framework_hint = "Auto-detect the appropriate testing framework based on the language/stack."
+
+    prompt = f"""You are an expert test engineer. Generate comprehensive unit tests for this codebase.
+{framework_hint}
+
+Rules:
+- Generate tests for the most important functions and classes
+- Include edge cases and error cases
+- Use proper test structure (describe/it blocks or test functions)
+- Add comments explaining what each test does
+- Make tests realistic and runnable
+
+Return a JSON object:
+{{
+    "framework": "<detected framework name>",
+    "language": "<primary language>",
+    "files": [
+        {{
+            "filename": "<test filename>",
+            "description": "<what this test file covers>",
+            "code": "<full test code>"
+        }}
+    ],
+    "setup_instructions": "<brief setup instructions to run these tests>"
+}}
+
+Codebase:
+{context[:70000]}
+
+Return ONLY valid JSON."""
+
+    raw = ai_generate(prompt)
+    if raw:
+        try:
+            return json.loads(raw.replace("```json", "").replace("```", "").strip())
+        except Exception:
+            pass
+    return {"error": "Test generation failed"}
+
+
+@app.post("/api/git-insights")
+async def get_git_insights(request: GitInsightsRequest):
+    """Analyze git history for insights."""
+    context = ensure_context(request.repo_url)
+    repo_path = CURRENT_REPO_PATH
+
+    if not repo_path or not os.path.exists(repo_path):
+        return {"error": "Repository not found"}
+
+    print("📈 Analyzing Git History...")
+
+    insights = {
+        "total_commits": 0,
+        "contributors": [],
+        "recent_commits": [],
+        "most_changed_files": [],
+        "commit_frequency": [],
+        "first_commit": None,
+        "last_commit": None,
+    }
+
     try:
-        response = client.models.generate_content(
-            model='gemini-flash-latest',
-            contents=f"Generate {request.doc_type}. Context: {context[:50000]}"
-        )
-        return {"markdown": response.text}
+        repo = git.Repo(repo_path)
+
+        # Basic stats
+        commits = list(repo.iter_commits(max_count=200))
+        insights["total_commits"] = len(commits)
+
+        # Recent commits
+        for commit in commits[:10]:
+            insights["recent_commits"].append(
+                {
+                    "hash": commit.hexsha[:7],
+                    "message": commit.message.strip()[:100],
+                    "author": commit.author.name,
+                    "date": commit.committed_datetime.isoformat(),
+                    "files_changed": len(commit.stats.files),
+                }
+            )
+
+        # Contributors
+        from collections import Counter
+
+        author_counts = Counter(c.author.name for c in commits)
+        insights["contributors"] = [
+            {"name": name, "commits": count}
+            for name, count in author_counts.most_common(10)
+        ]
+
+        # First and last commit
+        if commits:
+            insights["last_commit"] = commits[0].committed_datetime.isoformat()
+            insights["first_commit"] = commits[-1].committed_datetime.isoformat()
+
+        # Most changed files
+        file_changes = Counter()
+        for commit in commits:
+            for f in commit.stats.files:
+                file_changes[f] += 1
+        insights["most_changed_files"] = [
+            {"file": f, "changes": c} for f, c in file_changes.most_common(10)
+        ]
+
+        # Commit frequency by month
+        from collections import defaultdict
+
+        monthly = defaultdict(int)
+        for commit in commits:
+            month_key = commit.committed_datetime.strftime("%Y-%m")
+            monthly[month_key] += 1
+        insights["commit_frequency"] = [
+            {"month": k, "commits": v}
+            for k, v in sorted(monthly.items())[-12:]
+        ]
+
     except Exception as e:
-        return {"markdown": f"Error: {str(e)}"}
+        print(f"Git analysis error: {e}")
+        # Try AI-based fallback from code context
+        prompt = f"""Based on this codebase, estimate git statistics and return a JSON:
+{{
+    "total_commits": <estimated>,
+    "contributors": [{{"name": "...", "commits": ...}}],
+    "recent_commits": [],
+    "most_changed_files": [],
+    "commit_frequency": [],
+    "note": "Estimated from codebase analysis"
+}}
+Context: {context[:20000]}
+Return ONLY valid JSON."""
+        raw = ai_generate(prompt)
+        if raw:
+            try:
+                return json.loads(raw.replace("```json", "").replace("```", "").strip())
+            except Exception:
+                pass
 
-        return {"markdown": f"Error: {str(e)}"}
+    return insights
 
+
+# --- HELPERS ---
 def generate_security_report_markdown(issues):
-    """
-    Generates markdown content for SECURITY_REPORT.md based on the list of issues.
-    """
     if not issues:
         return ""
 
     report_content = "# Security Report\n\n"
+    report_content += f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n\n"
     report_content += "This report summarizes the security findings for the analyzed repository.\n\n"
 
-    # Group issues by severity
-    critical_issues = [i for i in issues if i['severity'] == 'CRITICAL']
-    high_issues = [i for i in issues if i['severity'] == 'HIGH']
-    medium_issues = [i for i in issues if i['severity'] == 'MEDIUM']
-    low_issues = [i for i in issues if i['severity'] == 'LOW']
-    unknown_issues = [i for i in issues if i['severity'] not in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']]
-
-    def add_issues_to_report(issue_list, severity_title):
-        nonlocal report_content
-        if issue_list:
-            report_content += f"## {severity_title} Issues\n\n"
-            for issue in issue_list:
+    severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    for severity in severity_order:
+        severity_issues = [i for i in issues if i.get("severity", "").upper() == severity]
+        if severity_issues:
+            report_content += f"## {severity} Issues ({len(severity_issues)})\n\n"
+            for issue in severity_issues:
                 report_content += f"### {issue.get('title', 'N/A')}\n"
                 report_content += f"- **Severity:** {issue.get('severity', 'N/A')}\n"
-                report_content += f"- **Location:** {issue.get('location', 'N/A')}\n"
+                report_content += f"- **Location:** `{issue.get('location', 'N/A')}`\n"
                 report_content += f"- **Description:** {issue.get('description', 'N/A')}\n\n"
-
-    add_issues_to_report(critical_issues, "CRITICAL")
-    add_issues_to_report(high_issues, "HIGH")
-    add_issues_to_report(medium_issues, "MEDIUM")
-    add_issues_to_report(low_issues, "LOW")
-    add_issues_to_report(unknown_issues, "OTHER")
 
     return report_content
 
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
