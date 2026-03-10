@@ -1,124 +1,100 @@
 import React, { useEffect, useState } from 'react';
-import { Check, Loader2, Pause } from 'lucide-react';
-import { motion } from 'framer-motion';
-import { clsx } from 'clsx';
+import { motion, AnimatePresence } from 'framer-motion';
+import { CheckCircle, Circle, Loader2 } from 'lucide-react';
 
-const LoadingScreen = ({ onComplete }) => {
-  const [progress, setProgress] = useState(0);
-  const [steps, setSteps] = useState([
-    { id: '1', label: 'Cloning repository', status: 'pending' },
-    { id: '2', label: 'Detecting languages', status: 'pending' },
-    { id: '3', label: 'Analyzing structure', status: 'pending' },
-    { id: '4', label: 'Scanning security', status: 'pending' },
-    { id: '5', label: 'Generating summary', status: 'pending' },
-  ]);
+const STEPS = [
+  { id: 1, label: 'Cloning Repository', sub: 'Fetching latest codebase from GitHub' },
+  { id: 2, label: 'Scanning Files', sub: 'Reading source code and project structure' },
+  { id: 3, label: 'AI Analysis', sub: 'Gemini is processing and understanding the code' },
+  { id: 4, label: 'Building Insights', sub: 'Compiling security, quality, and architecture data' },
+];
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(timer);
-          return 100;
-        }
-        return prev + 1; // ~5 seconds total
-      });
-    }, 40);
-
-    return () => clearInterval(timer);
-  }, []);
+const LoadingScreen = ({ onComplete, repoName }) => {
+  const [currentStep, setCurrentStep] = useState(0);
+  const [done, setDone] = useState(false);
 
   useEffect(() => {
-    const updateStep = (index, status) => {
-      setSteps((prev) => {
-        const next = [...prev];
-        next[index] = { ...next[index], status };
-        return next;
-      });
+    const stepDuration = 2200;
+    let step = 0;
+
+    const advance = () => {
+      step++;
+      setCurrentStep(step);
+      if (step >= STEPS.length) {
+        setDone(true);
+        setTimeout(onComplete, 600);
+      } else {
+        setTimeout(advance, stepDuration);
+      }
     };
 
-    if (progress > 5 && steps[0].status === 'pending') updateStep(0, 'active');
-    if (progress > 20 && steps[0].status === 'active') {
-      updateStep(0, 'complete');
-      updateStep(1, 'active');
-    }
-    if (progress > 40 && steps[1].status === 'active') {
-      updateStep(1, 'complete');
-      updateStep(2, 'active');
-    }
-    if (progress > 60 && steps[2].status === 'active') {
-      updateStep(2, 'complete');
-      updateStep(3, 'active');
-    }
-    if (progress > 80 && steps[3].status === 'active') {
-      updateStep(3, 'complete');
-      updateStep(4, 'active');
-    }
-    if (progress >= 100 && steps[4].status === 'active') {
-      updateStep(4, 'complete');
-      setTimeout(onComplete, 800);
-    }
-  }, [progress, steps, onComplete]);
+    const timer = setTimeout(advance, stepDuration);
+    return () => clearTimeout(timer);
+  }, [onComplete]);
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] w-full max-w-2xl mx-auto px-6">
-      {/* Progress Card */}
-      <div className="w-full bg-[#1A1F3A] border border-[#2A3254] rounded-2xl p-8 mb-8 shadow-2xl">
-        <div className="flex justify-between items-end mb-4">
-          <div>
-            <h3 className="text-xl font-semibold text-white mb-1">
-              Analyzing repository...
-            </h3>
-            <p className="text-[#94A3B8] text-sm font-mono">
-              {progress}% • Processing files
-            </p>
-          </div>
-          <div className="text-[#3B82F6]">
-            <Loader2 className="animate-spin" size={24} />
-          </div>
-        </div>
-
-        {/* Progress Bar */}
-        <div className="h-2 bg-[#2A3254] rounded-full overflow-hidden relative">
-          <motion.div
-            className="absolute top-0 left-0 h-full bg-gradient-to-r from-[#3B82F6] to-[#06B6D4]"
-            style={{ width: `${progress}%` }}
-          >
-            <div className="absolute inset-0 bg-white/20 animate-[shimmer_2s_infinite] translate-x-[-100%]" />
-          </motion.div>
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="flex flex-col items-center justify-center min-h-[80vh] px-4 text-center"
+    >
+      {/* Spinner */}
+      <div className="relative w-24 h-24 mb-8">
+        <div className="absolute inset-0 rounded-full border-4 border-[#2A3254]" />
+        <div className="absolute inset-0 rounded-full border-4 border-t-[#3B82F6] border-r-[#06B6D4] animate-spin" />
+        <div className="absolute inset-3 rounded-full bg-gradient-to-br from-[#3B82F6]/20 to-[#06B6D4]/20 flex items-center justify-center">
+          <Loader2 size={24} className="text-[#3B82F6] animate-pulse" />
         </div>
       </div>
+
+      <h2 className="text-2xl font-bold text-white mb-2">
+        {done ? '✨ Analysis Complete!' : 'Analyzing Repository'}
+      </h2>
+      {repoName && (
+        <p className="text-sm text-[#94A3B8] mb-10 font-mono">{repoName}</p>
+      )}
 
       {/* Steps */}
-      <div className="w-full space-y-4">
-        {steps.map((step) => (
-          <motion.div
-            key={step.id}
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="flex items-center justify-between p-3 rounded-lg border border-transparent"
-          >
-            <span className="text-[#E2E8F0] font-mono text-sm">
-              {step.label}
-            </span>
+      <div className="w-full max-w-md space-y-3">
+        {STEPS.map((step, i) => {
+          const isCompleted = i < currentStep;
+          const isActive = i === currentStep;
 
-            <div>
-              {step.status === 'pending' && (
-                <Pause size={18} className="text-[#4A5578]" />
-              )}
-              {step.status === 'active' && (
-                <Loader2
-                  size={18}
-                  className="text-[#3B82F6] animate-spin"
-                />
-              )}
-              {step.status === 'complete' && (
-                <Check size={18} className="text-[#10B981]" />
-              )}
-            </div>
-          </motion.div>
-        ))}
+          return (
+            <motion.div
+              key={step.id}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.1 }}
+              className={`flex items-center gap-4 p-4 rounded-xl border transition-all ${
+                isActive
+                  ? 'bg-[#3B82F6]/10 border-[#3B82F6]/30'
+                  : isCompleted
+                  ? 'bg-[#10B981]/5 border-[#10B981]/20'
+                  : 'bg-[#1A1F3A] border-[#2A3254] opacity-50'
+              }`}
+            >
+              <div className="shrink-0">
+                {isCompleted ? (
+                  <CheckCircle size={20} className="text-[#10B981]" />
+                ) : isActive ? (
+                  <Loader2 size={20} className="text-[#3B82F6] animate-spin" />
+                ) : (
+                  <Circle size={20} className="text-[#4A5578]" />
+                )}
+              </div>
+              <div className="text-left">
+                <p className={`text-sm font-medium ${isActive ? 'text-white' : isCompleted ? 'text-[#10B981]' : 'text-[#94A3B8]'}`}>
+                  {step.label}
+                </p>
+                <p className="text-xs text-[#94A3B8]">{step.sub}</p>
+              </div>
+            </motion.div>
+          );
+        })}
       </div>
-    </div>
+    </motion.div>
   );
 };
 

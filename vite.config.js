@@ -8,6 +8,34 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: "0.0.0.0",
+      proxy: {
+        // Proxy all /api calls and backend routes through Vite in dev mode
+        // This removes CORS issues during development
+        "/api": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+        },
+        "/overview": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+        },
+        "/structure": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+        },
+        "/chat": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+        },
+        "/generate": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+        },
+        "/health": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+        },
+      },
     },
     plugins: [react()],
     define: {
@@ -17,6 +45,18 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "."),
+      },
+    },
+    build: {
+      sourcemap: false,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            vendor: ["react", "react-dom"],
+            framer: ["framer-motion"],
+            markdown: ["react-markdown"],
+          },
+        },
       },
     },
   };
