@@ -15,6 +15,10 @@ export default defineConfig(({ mode }) => {
           target: "http://localhost:8000",
           changeOrigin: true,
         },
+        "/overview-fast": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+        },
         "/overview": {
           target: "http://localhost:8000",
           changeOrigin: true,

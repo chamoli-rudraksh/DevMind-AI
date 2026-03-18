@@ -4,6 +4,8 @@ import git
 import time
 import glob
 import stat
+import hashlib
+import json
 
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../workspace_data"))
@@ -88,21 +90,24 @@ def clone_and_scan(repo_url: str) -> tuple[str, str | None]:
         else:
             return "Error: Local path not found.", None
 
-    # Handle GitHub URLs
-    cleanup_old_repos()
-
     if not os.path.exists(BASE_DIR):
         os.makedirs(BASE_DIR)
 
-    timestamp = int(time.time())
-    repo_path = os.path.join(BASE_DIR, f"repo_{timestamp}")
+    # Use a hash of the URL for a persistent, predictable folder name
+    url_hash = hashlib.sha256(repo_url.encode()).hexdigest()[:12]
+    repo_path = os.path.join(BASE_DIR, f"repo_{url_hash}")
 
-    print(f"⬇️  Cloning into: {repo_path}...")
-
-    try:
-        git.Repo.clone_from(repo_url, repo_path, depth=50)  # shallow clone for speed
-    except Exception as e:
-        return f"Git Clone Error: {e}", None
+    if os.path.exists(repo_path):
+        print(f"♻️  Using cached repository: {repo_path}")
+    else:
+        print(f"⬇️  Cloning into: {repo_path}...")
+        try:
+            # depth=50 is a good balance for speed vs git history analysis
+            git.Repo.clone_from(repo_url, repo_path, depth=50) 
+        except Exception as e:
+            if os.path.exists(repo_path):
+                 shutil.rmtree(repo_path, onerror=handle_remove_readonly)
+            return f"Git Clone Error: {e}", None
 
     code_content, file_count = scan_directory(repo_path)
     print(f"✅ Scanned {file_count} files.")

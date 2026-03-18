@@ -53,7 +53,7 @@ const ChatInterface = ({ repoName, fullUrl }) => {
     setIsTyping(true);
 
     try {
-      const response = await fetch("http://localhost:8000/chat", {
+      const response = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMsg.text, repo_url: fullUrl }),

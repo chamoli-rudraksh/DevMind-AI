@@ -17,8 +17,8 @@ def run_detect_secrets_analysis(repo_path):
         # --all-files: Scan all files, not just changed ones
         # --json: Output in JSON format
         # --force-print: Print even if no secrets found (to ensure JSON output)
-        command = ["detect-secrets", "--all-files", "--json", "--force-print", repo_path]
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        command = ["detect-secrets", "scan", "--all-files", repo_path]
+        result = subprocess.run(command, capture_output=True, text=True)
         
         # Parse the JSON output
         secrets_output = json.loads(result.stdout)

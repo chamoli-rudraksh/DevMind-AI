@@ -26,7 +26,7 @@
 
 - Node.js 18+
 - Python 3.11+
-- A [Gemini API Key](https://aistudio.google.com/app/apikey)
+- [Ollama](https://ollama.com/) installed locally and running with the `llama3.1:8b` model (`ollama run llama3.1:8b`)
 
 ### 1. Clone the Repository
 
@@ -42,12 +42,6 @@ cd backend
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-Create a `.env` file in the `backend/` directory:
-
-```env
-GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
 Start the backend:
@@ -74,7 +68,7 @@ DevMind-AI/
 │   ├── main.py              # FastAPI app (all endpoints)
 │   ├── ingest.py            # GitHub cloning & file scanning
 │   ├── requirements.txt
-│   ├── .env                 # GEMINI_API_KEY (not committed)
+│   ├── .env.example
 │   └── security/
 │       ├── bandit_analyzer.py
 │       ├── detect_secrets_analyzer.py
@@ -120,14 +114,13 @@ DevMind-AI/
 
 | Variable | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | ✅ Yes | Google Gemini API key |
 | `ALLOWED_ORIGINS` | Optional | CORS allowed origins (default: `*`) |
 
 ## Tech Stack
 
 **Frontend:** React 19, Vite 6, Framer Motion, Tailwind CSS, Lucide Icons, React Markdown
 
-**Backend:** FastAPI, Python 3.11, Google Gemini AI, GitPython, Bandit, detect-secrets, Safety
+**Backend:** FastAPI, Python 3.11, Ollama (local AI), GitPython, Bandit, detect-secrets, Safety
 
 ## License
 

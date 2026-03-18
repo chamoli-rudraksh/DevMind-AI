@@ -17,11 +17,6 @@ function App() {
       ? url.split("github.com/")[1] || url
       : url;
     setRepoName(extractedName);
-    setStatus("analyzing");
-    setProgressStep(1);
-  };
-
-  const handleAnalysisComplete = () => {
     setStatus("complete");
     setProgressStep(2);
   };

@@ -27,7 +27,6 @@ def run_safety_analysis(repo_path):
             break
 
     if not found_dep_file:
-        print(f"No supported dependency file found in {repo_path} for Safety analysis.")
         return []
 
     print(f"Running Safety on {found_dep_file}...")
@@ -37,7 +36,7 @@ def run_safety_analysis(repo_path):
         # --json: output as json
         # -r: specify requirements file
         command = ["safety", "check", "--full-report", "--json", "-r", found_dep_file]
-        result = subprocess.run(command, capture_output=True, text=True, check=False) # check=False because safety exits with 1 if vulnerabilities found
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
         # Safety might return non-zero exit code even for successful runs with vulnerabilities
         # So we need to check stderr for actual errors and stdout for json output

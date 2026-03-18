@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
-from google import genai
+import requests
 from ingest import clone_and_scan
 import os
 import git
@@ -12,6 +12,8 @@ import json
 import warnings
 import re
 from datetime import datetime
+from collections import Counter, defaultdict
+from threading import Lock
 
 from security.bandit_analyzer import run_bandit_analysis
 from security.detect_secrets_analyzer import run_detect_secrets_analysis
@@ -19,6 +21,11 @@ from security.safety_analyzer import run_safety_analysis
 
 warnings.filterwarnings("ignore")
 load_dotenv()
+
+# Add venv/bin to PATH to ensure subprocess calls find bandit, detect-secrets etc.
+venv_bin = os.path.join(os.path.dirname(__file__), "venv", "bin")
+if os.path.exists(venv_bin):
+    os.environ["PATH"] = venv_bin + os.pathsep + os.environ.get("PATH", "")
 
 app = FastAPI(title="DevMind AI API", version="1.0.0")
 
@@ -31,16 +38,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    print("WARNING: GEMINI_API_KEY not found. AI features will be disabled.")
-
-client = genai.Client(api_key=api_key) if api_key else None
-
 # --- GLOBAL STATE ---
 CURRENT_CODE_CONTEXT = ""
 CURRENT_REPO_URL = ""
 CURRENT_REPO_PATH = ""
+CONTEXT_LOCK = Lock()
+AI_LOCK = Lock()
+ANALYSIS_CACHE = {}
 
 
 def is_valid_github_url(url: str) -> bool:
@@ -54,35 +58,49 @@ def is_local_path(url: str) -> bool:
 def ensure_context(url: str):
     global CURRENT_CODE_CONTEXT, CURRENT_REPO_URL, CURRENT_REPO_PATH
 
-    if url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
-        print(f"🔄 Switching context to: {url}")
-        code, path = clone_and_scan(url)
-
-        if path is None:
-            print("❌ Clone failed!")
-            CURRENT_CODE_CONTEXT = "Error: Repository could not be cloned."
-            CURRENT_REPO_PATH = ""
-        else:
-            CURRENT_CODE_CONTEXT = code
-            CURRENT_REPO_PATH = path
-            CURRENT_REPO_URL = url
-
+    with CONTEXT_LOCK:
+        if url != CURRENT_REPO_URL or not CURRENT_CODE_CONTEXT:
+            # check again in case another thread just finished it
+            if url == CURRENT_REPO_URL and CURRENT_CODE_CONTEXT:
+                 return CURRENT_CODE_CONTEXT
+                 
+            print(f"🔄 Switching context to: {url}")
+            code, path = clone_and_scan(url)
+    
+            if path is None:
+                print("❌ Clone failed!")
+                CURRENT_CODE_CONTEXT = "Error: Repository could not be cloned."
+                CURRENT_REPO_PATH = ""
+            else:
+                CURRENT_CODE_CONTEXT = code
+                CURRENT_REPO_PATH = path
+                CURRENT_REPO_URL = url
+    
     return CURRENT_CODE_CONTEXT
 
 
-def ai_generate(prompt: str, fallback=None):
-    """Helper to call Gemini with proper error handling."""
-    if not client:
-        return fallback or {}
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-        )
-        return response.text
-    except Exception as e:
-        print(f"Gemini error: {e}")
-        return None
+def ai_generate(prompt: str, is_json: bool = False):
+    """Helper to call Ollama via local REST API with sequential locking."""
+    with AI_LOCK:
+        try:
+            payload = {
+                "model": "llama3.1:8b",
+                "prompt": prompt,
+                "stream": False
+            }
+            if is_json:
+                payload["format"] = "json"
+    
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json=payload,
+                timeout=180
+            )
+            response.raise_for_status()
+            return response.json().get("response")
+        except Exception as e:
+            print(f"Ollama error: {e}")
+            return None
 
 
 # --- MODELS ---
@@ -149,17 +167,17 @@ class GitInsightsRequest(BaseModel):
 
 
 @app.get("/health")
-async def health_check():
+def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "ai_enabled": client is not None,
+        "ai_enabled": True,
         "version": "1.0.0",
     }
 
 
 @app.post("/structure")
-async def get_project_structure(request: OverviewRequest):
+def get_project_structure(request: OverviewRequest):
     ensure_context(request.url)
     repo_path = CURRENT_REPO_PATH
 
@@ -204,10 +222,15 @@ async def get_project_structure(request: OverviewRequest):
 
 
 @app.post("/api/analyze-security")
-async def analyze_security(request: SecurityRequest):
+def analyze_security(request: SecurityRequest):
     context = ensure_context(request.repo_url)
     if "Error:" in context[:100]:
         return {"issues": []}
+
+    cache_key = f"security_{request.repo_url}"
+    if cache_key in ANALYSIS_CACHE:
+        print("🛡️  Returning Cached Security Analysis...")
+        return ANALYSIS_CACHE[cache_key]
 
     print("🛡️  Running Security Analysis...")
 
@@ -256,13 +279,13 @@ async def analyze_security(request: SecurityRequest):
     Focus on: Hardcoded secrets, SQL injection, XSS, CSRF, insecure deserialization, dangerous dependencies.
 
     CODEBASE CONTEXT:
-    {context[:80000]}
+    {context[:5000]}
 
     Return ONLY a JSON object with a key "issues" containing a list.
     Each item must have: "severity" (CRITICAL, HIGH, MEDIUM, LOW), "title", "location", and "description".
     Return at most 10 AI-detected issues. If none found, return {{"issues": []}}.
     """
-    raw = ai_generate(prompt)
+    raw = ai_generate(prompt, is_json=True)
     if raw:
         try:
             json_str = raw.replace("```json", "").replace("```", "").strip()
@@ -281,43 +304,102 @@ async def analyze_security(request: SecurityRequest):
         except IOError:
             pass
 
-    return {"issues": all_issues}
+    result = {"issues": all_issues}
+    ANALYSIS_CACHE[cache_key] = result
+    return result
+
+
+@app.post("/overview-fast")
+def get_fast_overview(request: OverviewRequest):
+    """Return instant file stats without calling AI. Responds in <100ms."""
+    context = ensure_context(request.url)
+    repo_path = CURRENT_REPO_PATH
+
+    if not repo_path or not os.path.exists(repo_path):
+        return {"total_files": 0, "total_lines": 0, "languages": {}, "complexity": "Unknown"}
+
+    ignore_dirs = {".git", "node_modules", "__pycache__", "dist", "build", "venv",
+                   ".idea", ".vscode", ".mypy_cache", ".pytest_cache", "coverage", ".next"}
+
+    lang_map = {
+        ".py": "Python", ".js": "JavaScript", ".ts": "TypeScript", ".tsx": "TypeScript",
+        ".jsx": "JavaScript", ".java": "Java", ".cpp": "C++", ".c": "C", ".h": "C/C++",
+        ".go": "Go", ".rs": "Rust", ".rb": "Ruby", ".html": "HTML", ".css": "CSS",
+        ".scss": "SCSS", ".json": "JSON", ".md": "Markdown", ".yml": "YAML",
+        ".yaml": "YAML", ".sql": "SQL", ".sh": "Shell", ".vue": "Vue",
+        ".svelte": "Svelte", ".xml": "XML", ".toml": "TOML", ".graphql": "GraphQL",
+    }
+
+    total_files = 0
+    total_lines = 0
+    languages = Counter()
+
+    for root, dirs, files in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if d not in ignore_dirs]
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in lang_map:
+                total_files += 1
+                lang = lang_map[ext]
+                try:
+                    fp = os.path.join(root, f)
+                    with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
+                        lines = sum(1 for _ in fh)
+                        total_lines += lines
+                        languages[lang] += lines
+                except Exception:
+                    pass
+
+    complexity = "Low" if total_lines < 5000 else "Medium" if total_lines < 20000 else "High"
+
+    # Top languages by line count
+    top_langs = dict(languages.most_common(8))
+
+    return {
+        "total_files": total_files,
+        "total_lines": total_lines,
+        "languages": top_langs,
+        "complexity": complexity,
+    }
 
 
 @app.post("/overview")
-async def get_repo_overview(request: OverviewRequest):
+def get_repo_overview(request: OverviewRequest):
     context = ensure_context(request.url)
 
-    print("📊 Generating Overview...")
-    prompt = f"""
-    You are a Senior Tech Lead. Analyze the codebase below and return a STRICT JSON summary.
-    Required JSON Structure:
-    {{
-        "description": "2-3 sentence summary of what this project does",
-        "tech_stack": ["list", "of", "technologies"],
-        "key_features": ["list", "of", "key", "features"],
-        "stats": {{ "files": "estimated count", "complexity": "Low/Medium/High", "lines_of_code": "estimate" }}
-    }}
-    Context: {context[:80000]}
-    Return ONLY valid JSON, no markdown.
-    """
+    cache_key = f"overview_{request.url}"
+    if cache_key in ANALYSIS_CACHE:
+        print("📊 Returning Cached Overview...")
+        return ANALYSIS_CACHE[cache_key]
 
-    raw = ai_generate(prompt)
+    print("📊 Generating Overview...")
+    prompt = f"""Analyze this codebase. Return JSON:
+{{
+    "description": "2-3 sentence summary",
+    "tech_stack": ["tech1", "tech2"],
+    "key_features": ["feature1", "feature2"]
+}}
+Codebase:
+{context[:3000]}
+Return ONLY valid JSON."""
+
+    raw = ai_generate(prompt, is_json=True)
     if raw:
         try:
-            return json.loads(raw.replace("```json", "").replace("```", "").strip())
+            result = json.loads(raw.replace("```json", "").replace("```", "").strip())
+            ANALYSIS_CACHE[cache_key] = result
+            return result
         except Exception:
             pass
     return {
-        "description": "Analysis failed. Please check your API key.",
+        "description": "Analysis failed. Please check if your local Ollama is running.",
         "tech_stack": [],
         "key_features": [],
-        "stats": {},
     }
 
 
 @app.post("/chat")
-async def chat_with_repo(request: ChatRequest):
+def chat_with_repo(request: ChatRequest):
     context = ensure_context(request.repo_url)
     print(f"💬 Chatting: {request.message[:50]}...")
 
@@ -328,14 +410,14 @@ Be specific, concise, and use markdown formatting with code blocks where helpful
 User question: {request.message}
 
 Codebase context:
-{context[:60000]}"""
+{context[:5000]}"""
 
     raw = ai_generate(prompt)
-    return {"response": raw or "I couldn't generate a response. Please check your API key."}
+    return {"response": raw or "I couldn't generate a response. Please check your local Ollama instance."}
 
 
 @app.post("/generate")
-async def generate_docs(request: RepoRequest):
+def generate_docs(request: RepoRequest):
     context = ensure_context(request.url)
     print(f"📝 Generating {request.doc_type}...")
 
@@ -351,18 +433,23 @@ async def generate_docs(request: RepoRequest):
 Output only the markdown content, no additional commentary.
 
 Codebase context:
-{context[:60000]}"""
+{context[:5000]}"""
 
     raw = ai_generate(prompt)
     return {"markdown": raw or f"# {request.doc_type}\n\nGeneration failed."}
 
 
 @app.post("/api/analyze-quality")
-async def analyze_code_quality(request: QualityRequest):
+def analyze_code_quality(request: QualityRequest):
     """Analyze code quality metrics using AI."""
     context = ensure_context(request.repo_url)
     if "Error:" in context[:100]:
         return {"error": "Could not load repository"}
+
+    cache_key = f"quality_{request.repo_url}"
+    if cache_key in ANALYSIS_CACHE:
+        print("🔍 Returning Cached Code Quality...")
+        return ANALYSIS_CACHE[cache_key]
 
     print("🔍 Analyzing Code Quality...")
 
@@ -386,21 +473,23 @@ Analyze this codebase and return a JSON object with the following structure:
 }}
 
 Codebase:
-{context[:80000]}
+{context[:5000]}
 
 Return ONLY valid JSON."""
 
-    raw = ai_generate(prompt)
+    raw = ai_generate(prompt, is_json=True)
     if raw:
         try:
-            return json.loads(raw.replace("```json", "").replace("```", "").strip())
+            result = json.loads(raw.replace("```json", "").replace("```", "").strip())
+            ANALYSIS_CACHE[cache_key] = result
+            return result
         except Exception:
             pass
     return {"error": "Quality analysis failed"}
 
 
 @app.post("/api/generate-tests")
-async def generate_tests(request: TestGenRequest):
+def generate_tests(request: TestGenRequest):
     """Generate unit tests for the analyzed codebase."""
     context = ensure_context(request.repo_url)
     if "Error:" in context[:100]:
@@ -439,11 +528,11 @@ Return a JSON object:
 }}
 
 Codebase:
-{context[:70000]}
+{context[:5000]}
 
 Return ONLY valid JSON."""
 
-    raw = ai_generate(prompt)
+    raw = ai_generate(prompt, is_json=True)
     if raw:
         try:
             return json.loads(raw.replace("```json", "").replace("```", "").strip())
@@ -453,13 +542,18 @@ Return ONLY valid JSON."""
 
 
 @app.post("/api/git-insights")
-async def get_git_insights(request: GitInsightsRequest):
+def get_git_insights(request: GitInsightsRequest):
     """Analyze git history for insights."""
     context = ensure_context(request.repo_url)
     repo_path = CURRENT_REPO_PATH
 
     if not repo_path or not os.path.exists(repo_path):
         return {"error": "Repository not found"}
+
+    cache_key = f"git_insights_{request.repo_url}"
+    if cache_key in ANALYSIS_CACHE:
+        print("📈 Returning Cached Git Insights...")
+        return ANALYSIS_CACHE[cache_key]
 
     print("📈 Analyzing Git History...")
 
@@ -539,15 +633,18 @@ async def get_git_insights(request: GitInsightsRequest):
     "commit_frequency": [],
     "note": "Estimated from codebase analysis"
 }}
-Context: {context[:20000]}
+Context: {context[:5000]}
 Return ONLY valid JSON."""
-        raw = ai_generate(prompt)
+        raw = ai_generate(prompt, is_json=True)
         if raw:
             try:
-                return json.loads(raw.replace("```json", "").replace("```", "").strip())
+                result = json.loads(raw.replace("```json", "").replace("```", "").strip())
+                ANALYSIS_CACHE[cache_key] = result
+                return result
             except Exception:
                 pass
 
+    ANALYSIS_CACHE[cache_key] = insights
     return insights
 
 
