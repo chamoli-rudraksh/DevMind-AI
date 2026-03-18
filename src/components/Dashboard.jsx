@@ -22,6 +22,12 @@ import { motion, AnimatePresence } from "framer-motion";
 
 const Dashboard = ({ repoName, fullUrl, onReset }) => {
   const [activeTab, setActiveTab] = useState("overview");
+  const [visitedTabs, setVisitedTabs] = useState({ overview: true });
+
+  const handleTabChange = (tabId) => {
+    setActiveTab(tabId);
+    setVisitedTabs((prev) => ({ ...prev, [tabId]: true }));
+  };
 
   const tabs = [
     { id: "overview", label: "Overview", icon: LayoutDashboard, color: "text-[#3B82F6]" },
@@ -49,7 +55,7 @@ const Dashboard = ({ repoName, fullUrl, onReset }) => {
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabChange(tab.id)}
               className={clsx(
                 "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 text-sm font-medium group",
                 activeTab === tab.id
@@ -87,7 +93,7 @@ const Dashboard = ({ repoName, fullUrl, onReset }) => {
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => handleTabChange(tab.id)}
             className={clsx(
               "flex items-center gap-1.5 px-3 py-2 rounded-full whitespace-nowrap text-xs border transition-all",
               activeTab === tab.id
@@ -102,33 +108,35 @@ const Dashboard = ({ repoName, fullUrl, onReset }) => {
       </div>
 
       {/* Main Content */}
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={activeTab}
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.25 }}
-          className="flex-1 space-y-6 min-w-0"
-        >
-          {activeTab === "overview" && (
-            <>
-              <CodebaseOverview repoName={repoName} fullUrl={fullUrl} />
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <ProjectStructure fullUrl={fullUrl} />
-                <SecurityAnalysis fullUrl={fullUrl} />
-              </div>
-            </>
-          )}
-          {activeTab === "structure" && <ProjectStructure fullUrl={fullUrl} />}
-          {activeTab === "security" && <SecurityAnalysis fullUrl={fullUrl} />}
-          {activeTab === "quality" && <CodeQuality fullUrl={fullUrl} />}
-          {activeTab === "tests" && <TestGenerator fullUrl={fullUrl} repoName={repoName} />}
-          {activeTab === "git" && <GitInsights fullUrl={fullUrl} />}
-          {activeTab === "docs" && <DocGenerator repoUrl={fullUrl} />}
-          {activeTab === "chat" && <ChatInterface repoName={repoName} fullUrl={fullUrl} />}
-        </motion.div>
-      </AnimatePresence>
+      <div className="flex-1 min-w-0 relative">
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            style={{ display: activeTab === tab.id ? "block" : "none" }}
+            className="space-y-6 h-full"
+          >
+            {visitedTabs[tab.id] && (
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.25 }}
+                className="h-full"
+              >
+                {tab.id === "overview" && (
+                  <CodebaseOverview repoName={repoName} fullUrl={fullUrl} onTabChange={handleTabChange} />
+                )}
+                {tab.id === "structure" && <ProjectStructure fullUrl={fullUrl} />}
+                {tab.id === "security" && <SecurityAnalysis fullUrl={fullUrl} />}
+                {tab.id === "quality" && <CodeQuality fullUrl={fullUrl} />}
+                {tab.id === "tests" && <TestGenerator fullUrl={fullUrl} repoName={repoName} />}
+                {tab.id === "git" && <GitInsights fullUrl={fullUrl} />}
+                {tab.id === "docs" && <DocGenerator repoUrl={fullUrl} />}
+                {tab.id === "chat" && <ChatInterface repoName={repoName} fullUrl={fullUrl} />}
+              </motion.div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 };

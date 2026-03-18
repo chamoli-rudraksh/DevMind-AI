@@ -18,8 +18,8 @@ def run_bandit_analysis(repo_path):
         # -f json: output format json
         # -n: disable --non-recursive (useful when running on a single file)
         # -q: quiet (only print errors, not progress)
-        command = ["bandit", "-r", repo_path, "-f", "json", "-n", "-q"]
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        command = ["bandit", "-r", repo_path, "-f", "json", "-q"]
+        result = subprocess.run(command, capture_output=True, text=True)
         
         # Parse the JSON output
         bandit_output = json.loads(result.stdout)

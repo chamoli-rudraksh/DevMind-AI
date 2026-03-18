@@ -53,7 +53,7 @@ const CodeQuality = ({ fullUrl }) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("http://localhost:8000/api/analyze-quality", {
+      const res = await fetch("/api/analyze-quality", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo_url: fullUrl }),

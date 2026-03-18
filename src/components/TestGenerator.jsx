@@ -52,7 +52,7 @@ const TestGenerator = ({ fullUrl, repoName }) => {
     setData(null);
 
     try {
-      const res = await fetch("http://localhost:8000/api/generate-tests", {
+      const res = await fetch("/api/generate-tests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repo_url: fullUrl, framework }),
