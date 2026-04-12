@@ -670,7 +670,23 @@ def generate_security_report_markdown(issues):
 
     return report_content
 
+@app.get("/system-info")
+def system_info():
+    return {
+        "service": "DevMind-AI Backend",
+        "version": "1.0",
+        "status": "running",
+        "features": [
+            "Code Analysis",
+            "Security Scanning",
+            "AI Documentation",
+            "Test Generation",
+            "Git Insights"
+        ]
+    }
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+
+   
