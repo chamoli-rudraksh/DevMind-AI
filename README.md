@@ -1,11 +1,45 @@
 # DevMind AI ⚡
 
+## Problem Statement
+
+Modern codebases are difficult to understand due to fragmented tooling:
+- Static analyzers provide raw findings but lack context
+- Documentation tools generate summaries without structural grounding
+- Developers spend excessive time navigating and interpreting codebases
+
+DevMind-AI addresses this gap by combining deterministic analysis with context-aware AI reasoning to produce actionable, structured insights.
+
 > AI-powered codebase intelligence — security audits, code quality scores, documentation generation, unit test creation, and git analytics from a single GitHub URL.
 
 ![DevMind AI](https://img.shields.io/badge/AI-Powered-3B82F6?style=flat-square&logo=google&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-009688?style=flat-square&logo=fastapi)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python)
+
+## System Architecture Overview
+
+DevMind-AI follows a hybrid intelligence pipeline:
+
+1. **Repository Ingestion**
+   - Clones GitHub repository and extracts structure
+
+2. **Deterministic Analysis**
+   - Runs Bandit, Safety, and Detect-Secrets
+   - Produces factual, structured outputs
+
+3. **Context Construction**
+   - Maps relationships between files, dependencies, and issues
+   - Builds semantically meaningful context
+
+4. **Generative Intelligence**
+   - Uses LLM reasoning on grounded context
+   - Generates documentation, explanations, and remediation steps
+
+5. **Visualization Layer**
+   - Presents insights via dashboard and structured outputs
+
+For detailed explanation, see:
+👉 `ARCHITECTURE_EXPLANATION.md`
 
 ## Features
 
